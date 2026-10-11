@@ -70,3 +70,39 @@ def test_coordinator_beelden_en_opnames():
             {"record_id": 1, "device_sn": "T8113", "start_time": "2026-10-11 10:00:00", "storage_path": "/v1"},
             {"record_id": 2, "device_sn": "T8113", "start_time": "2026-10-11 12:00:00", "storage_path": "/v2"}]}]}).encode()))
     assert [o["record_id"] for o in c.opnames["T8113"]] == [2, 1]
+
+
+def test_vragen_een_voor_een():
+    import asyncio
+    import struct
+
+    from custom_components.eufy_lokaal.p2p import bericht
+
+    async def _proef():
+        s = ps.P2PSessie("T8030T2325281762", "EUPRDMB-241997-DGTKC", "1.2.3.4", 1)
+        verstuurd = []
+
+        class _T:
+            def sendto(self, d, a):
+                verstuurd.append(d)
+
+            def close(self):
+                pass
+
+        s._transport, s._adres = _T(), ("1.2.3.4", 1)
+        s.meting.verbonden, s.meting.niveau, s.sleutel = True, 1, b"5281762-241997-D"
+        s.vraag(ps.afbeelding_tekst("a", "/1.jpg"), "afbeelding")
+        s.vraag(ps.afbeelding_tekst("a", "/2.jpg"), "afbeelding")
+        s.vraag(ps.afbeelding_tekst("a", "/2.jpg"), "afbeelding")  # dubbel: niet nog eens
+        eerst = len(verstuurd)
+        inh = b'{"file":"/1.jpg","content":"/9g"}'.ljust(48, b"\x00")
+        antw = (ps.MAGIC + struct.pack("<H", 1308) + struct.pack("<I", len(inh)) + b"\x00\x00"
+                + bytes([255, 0, 0, 0]) + inh)
+        s.ontvang(bericht(ps.DATA, b"\xd1\x02" + struct.pack(">H", 0) + antw), s._adres)
+        await asyncio.sleep(0.01)
+        data_pakketten = [d for d in verstuurd if d[:2] == ps.DATA]
+        s.sluit()
+        return eerst, len(data_pakketten), s
+
+    eerst, totaal, s = asyncio.run(_proef())
+    assert eerst == 1 and totaal == 2 and s.meting.opdrachten_gestuurd == {"afbeelding": 2}

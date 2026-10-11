@@ -94,6 +94,7 @@ TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})
 # eufy-security-client; alleen wat deze integratie stuurt).
 VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO, CMD_SET_PAYLOAD})
 ANTWOORD_TIMEOUT_S = 10.0
+VRAAG_TIMEOUT_S = 15.0
 CAMERA_INFO_ELKE_S = 600.0
 OPNIEUW_NA_S = 1.0
 MAX_OPNIEUW = 4
@@ -414,6 +415,8 @@ class P2PSessie:
         self._camera_info_t = 0.0
         self._wacht_op: dict[int, asyncio.Future] = {}  # opdracht -> antwoord (returncode)
         self._laatste_vraag_t = 0.0
+        self._rij: list[tuple[str, str]] = []
+        self._vraag_bezig: float | None = None
 
     def _stuur(self, data: bytes, adres) -> None:
         if self._transport is None:
@@ -519,15 +522,33 @@ class P2PSessie:
         self.meting.opdrachten_gestuurd[soort] = self.meting.opdrachten_gestuurd.get(soort, 0) + 1
 
     def vraag(self, tekst: str, soort: str) -> bool:
-        """Stap 5: een leesvraag (database, afbeelding). Niet terwijl de
-        bewakingsstand op antwoord wacht."""
+        """Stap 5: een leesvraag (database, afbeelding) in de rij. De HomeBase
+        beantwoordt er één tegelijk: de volgende gaat pas als het antwoord
+        (1306/1308) binnen is, of na VRAAG_TIMEOUT_S."""
         if self._transport is None or self._adres is None or self.sleutel is None:
             return False
-        if CMD_SET_PAYLOAD in self._wacht_op:
-            return False
-        self._laatste_vraag_t = time.monotonic()
-        self._stuur_payload(tekst, soort)
+        if any(v[0] == tekst for v in self._rij):
+            return True
+        self._rij.append((tekst, soort))
+        self._volgende_vraag()
         return True
+
+    def _volgende_vraag(self) -> None:
+        if self._vraag_bezig is not None and time.monotonic() - self._vraag_bezig < VRAAG_TIMEOUT_S:
+            return
+        if self._vraag_bezig is not None:
+            self.meting.laatste_fout = "vraag zonder antwoord (timeout)"
+        self._vraag_bezig = None
+        if not self._rij or self._transport is None or self._adres is None:
+            return
+        if CMD_SET_PAYLOAD in self._wacht_op:  # bewakingsstand gaat voor
+            asyncio.get_running_loop().call_later(1.0, self._volgende_vraag)
+            return
+        tekst, soort = self._rij.pop(0)
+        self._vraag_bezig = time.monotonic()
+        self._laatste_vraag_t = self._vraag_bezig
+        self._stuur_payload(tekst, soort)
+        asyncio.get_running_loop().call_later(VRAAG_TIMEOUT_S + 0.1, self._volgende_vraag)
 
     def _verstuur_data(self, pakket: bytes) -> None:
         """Verstuur en houd vast tot het station het bevestigt (ACK)."""
@@ -632,6 +653,9 @@ class P2PSessie:
             wacht = self._wacht_op[kop.opdracht]
             if not wacht.done():
                 wacht.set_result(struct.unpack("<i", inhoud[:4])[0] if len(inhoud) >= 4 else -1)
+        if not resultaat and kop.opdracht in (CMD_DATABASE, CMD_DATABASE_IMAGE) and self._vraag_bezig is not None:
+            self._vraag_bezig = None
+            asyncio.get_running_loop().call_soon(self._volgende_vraag)
         if self._bij_bericht is not None:
             from .berichten import ontleed
 

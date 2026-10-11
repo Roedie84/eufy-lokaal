@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.5.1 — vragen één voor één
+
+- De HomeBase beantwoordt één databasevraag of afbeelding tegelijk: vragen gaan nu in een rij, de volgende pas na het antwoord (of na 15 s).
+- Base64 van afbeeldingen robuuster (witruimte, ontbrekende opvulling); bij een mislukt beeld staat de oorzaak in `laatste_fout`.
+- `antwoorden`: de laatste returncodes van de HomeBase.
+
 ## v0.5.0 — stap 5: laatste beeld en opnames, lokaal
 
 - Per camera een **Laatste beeld** (image-entiteit): de HomeBase geeft het pad van het laatste gebeurtenisbeeld (database, 10013), de integratie haalt de JPEG lokaal op (CMD_DATABASE_IMAGE, 1308). Beelden met de kop "eufysecurity" worden ontsleuteld (getoetst tegen eufy-security-client).

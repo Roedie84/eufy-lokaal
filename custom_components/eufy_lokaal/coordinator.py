@@ -256,6 +256,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if soort in ("melding", "alarmstand", "vertraagd_alarm", "alarm_ingeschakeld"):
                 # na een gebeurtenis staat er vaak een nieuw beeld klaar
                 self.hass.loop.call_later(8, self._vraag_laatste_info, station_sn)
+            if soort == "antwoord":
+                lijst = self.tellingen.setdefault("antwoorden", [])
+                lijst.append({"opdracht": b.get("opdracht"), "code": b.get("returncode"), "t": round(nu)})
+                del lijst[:-8]
             if soort in ("ping", "antwoord", "camera_info"):
                 self.async_update_listeners()
                 return
@@ -349,7 +353,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         did = (self.stations.get(station_sn) or {}).get("p2p_did", "")
         data = ontsleutel_afbeelding(did, b.get("ruw") or b"")
         if data[:2] != b"\xff\xd8":
-            self.tellingen["laatste_fout"] = f"afbeelding {pad}: geen JPEG ({data[:4].hex()})"
+            self.tellingen["laatste_fout"] = (
+                f"afbeelding {pad}: geen JPEG ({data[:4].hex()}; b64 {b.get('b64_lengte')} tekens, "
+                f"begin {b.get('b64_begin')!r}, fout {b.get('fout')}, velden {b.get('sleutels')})")
+            if not data:
+                return
         self.beelden[sn] = {"pad": pad, "data": data, "tijd": time.time(), "grootte": len(data)}
 
     def _ververs_parameters_straks(self, station_sn: str, na_s: float = 3.0) -> None:
@@ -423,6 +431,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         return {
             "stap": "4 - lokale berichten, parameters en bewakingsstand",
             "laatste_stand_opdracht": t.get("laatste_stand_opdracht"),
+            "antwoorden": t.get("antwoorden"),
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],

@@ -182,11 +182,14 @@ def ontleed(opdracht: int, inhoud: bytes, resultaat: bool = False, kanaal: int =
     elif opdracht == CMD_DATABASE_IMAGE:
         j = json_uit(inhoud)
         if isinstance(j, dict) and j.get("content"):
+            inhoud_b64 = "".join(str(j["content"]).split())
             try:
-                ruw = base64.b64decode(j["content"])
-            except ValueError:
-                ruw = b""
-            uit.update(soort="afbeelding", bestand=j.get("file"), ruw=ruw)
+                ruw = base64.b64decode(inhoud_b64 + "=" * (-len(inhoud_b64) % 4))
+                fout = None
+            except ValueError as err:
+                ruw, fout = b"", str(err)
+            uit.update(soort="afbeelding", bestand=j.get("file"), ruw=ruw, b64_lengte=len(inhoud_b64),
+                       b64_begin=inhoud_b64[:24], fout=fout, sleutels=sorted(j))
         else:
             uit.update(soort="onleesbaar", begin=inhoud[:48].hex())
     elif opdracht in (CMD_PING, CMD_GET_DEVICE_PING):
