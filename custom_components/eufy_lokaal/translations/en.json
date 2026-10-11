@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Lokaal",
+        "description": "Preferably use a second Eufy account that your main account shares the devices with: Eufy logs an account out elsewhere on every new login.",
+        "data": {
+          "land": "Country (2 letters, e.g. NL)",
+          "email": "Email",
+          "wachtwoord": "Password"
+        }
+      },
+      "e_mailcode": {
+        "title": "Email code",
+        "description": "Eufy sent a code to this account's email address.",
+        "data": {
+          "code": "Code"
+        }
+      },
+      "captcha": {
+        "title": "Captcha",
+        "description": "Eufy asks for a captcha.\n\n![captcha]({afbeelding})",
+        "data": {
+          "antwoord": "Characters in the image"
+        }
+      }
+    },
+    "error": {
+      "inloggen": "Email or password is wrong.",
+      "e_mailcode": "The code is wrong or expired.",
+      "cloud": "The Eufy cloud returned an error; try again later.",
+      "verbinding": "Cannot reach the Eufy cloud."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Logged in again."
+    }
+  }
+}

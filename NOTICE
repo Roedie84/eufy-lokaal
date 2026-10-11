@@ -1,0 +1,7 @@
+Eufy Lokaal implementeert het Eufy-protocol naar de beschrijving in
+eufy-security-client (https://github.com/bropat/eufy-security-client),
+MIT License, Copyright (c) 2021-2024 bropat. Er is geen code van dat
+project overgenomen; het diende als protocolreferentie.
+
+Eufy is een merk van Anker Innovations. Dit project is niet verbonden met
+Anker of Eufy.
