@@ -104,6 +104,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.opnames: dict[str, list] = {}
         self._beeld_voor: dict[str, tuple[str, float]] = {}  # bestand op de HomeBase -> (apparaat, gevraagd)
         self._info_ronde = 0
+        # stap 6: livestreams
+        from .video import nieuw_token
+
+        self.live: dict[str, "LiveStream"] = {}
+        self.live_token = nieuw_token()
 
     # cloud ----------------------------------------------------------------------
 
@@ -198,6 +203,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             # v0.2.1: één meting over alle pogingen heen (tellers lopen door).
             nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn), meting,
                               self._bij_bericht_voor(sn))
+            nieuw._bij_video = self._bij_video_voor(sn)
+            for stream in self.live.values():  # lopende streams zijn met de oude sessie weg
+                if (self.apparaten.get(stream.sn) or {}).get("station_sn") == sn:
+                    stream.stop()
             self.sessies[sn] = nieuw
             try:
                 await nieuw.verbind()
@@ -368,6 +377,62 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 return
         self.beelden[sn] = {"pad": pad, "data": data, "tijd": time.time(), "grootte": len(data)}
 
+    # stap 6: livestream ----------------------------------------------------------------
+
+    def live_stream(self, apparaat_sn: str):
+        """De (enige) livestream van een camera, zo nodig aangemaakt."""
+        from .video import LiveStream
+
+        if apparaat_sn not in self.live:
+            a = self.apparaten.get(apparaat_sn) or {}
+            station_sn = a.get("station_sn") or ""
+            kanaal = int(a.get("device_channel") or 0)
+            self.live[apparaat_sn] = LiveStream(
+                apparaat_sn, kanaal,
+                lambda sleutel: self._start_live(apparaat_sn, sleutel),
+                lambda: self._stop_live(apparaat_sn),
+            )
+        return self.live[apparaat_sn]
+
+    def _start_live(self, apparaat_sn: str, publieke_sleutel: str) -> None:
+        from .video_opdrachten import startopdracht
+
+        a = self.apparaten.get(apparaat_sn) or {}
+        station_sn = a.get("station_sn") or ""
+        s = self.sessies.get(station_sn)
+        if s is None or not s.levend:
+            raise ConnectionError("geen lokale verbinding met de HomeBase")
+        opdracht, tekst, route = startopdracht(
+            int(a.get("device_type") or 0), int(a.get("device_channel") or 0),
+            self._account(station_sn), publieke_sleutel, station_sn)
+        self.live[apparaat_sn].route = route
+        s.start_live(int(a.get("device_channel") or 0), opdracht, tekst)
+
+    def _stop_live(self, apparaat_sn: str) -> None:
+        a = self.apparaten.get(apparaat_sn) or {}
+        s = self.sessies.get(a.get("station_sn") or "")
+        if s is not None:
+            s.stop_live(int(a.get("device_channel") or 0))
+
+    def _bij_video_voor(self, station_sn: str):
+        from .p2p_sessie import CMD_VIDEO_FRAME
+
+        def bij_video(kop, inhoud: bytes) -> None:
+            if kop.opdracht != CMD_VIDEO_FRAME:
+                return  # audio (1301) laten we voorlopig weg
+            for stream in self.live.values():
+                if stream.actief and stream.kanaal == kop.kanaal and \
+                        (self.apparaten.get(stream.sn) or {}).get("station_sn") == station_sn:
+                    stream.bij_frame(inhoud, kop.versleuteld)
+                    return
+        return bij_video
+
+    def stream_url(self, apparaat_sn: str) -> str:
+        poort = getattr(getattr(self.hass, "http", None), "server_port", None) or 8123
+        ssl = bool(getattr(getattr(self.hass.config, "api", None), "use_ssl", False))
+        return (f"{'https' if ssl else 'http'}://127.0.0.1:{poort}/api/{DOMAIN}/live/"
+                f"{apparaat_sn}?token={self.live_token}")
+
     def _ververs_parameters_straks(self, station_sn: str, na_s: float = 3.0) -> None:
         s = self.sessies.get(station_sn)
         if s is not None:
@@ -419,6 +484,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         return haal
 
     def stop(self) -> None:
+        for l in self.live.values():
+            l.stop()
         for s in self.sessies.values():
             s.sluit()
 
@@ -462,4 +529,5 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "alarmstand": self.alarmstand,
             "beelden": {sn: {k: v for k, v in b.items() if k != "data"} for sn, b in self.beelden.items()},
             "opnames": {sn: len(v) for sn, v in self.opnames.items()},
+            "live": {sn: {**l.samenvatting(), "route": getattr(l, "route", None)} for sn, l in self.live.items()},
         }

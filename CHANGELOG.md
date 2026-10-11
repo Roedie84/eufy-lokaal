@@ -1,5 +1,14 @@
 # Changelog — Eufy Lokaal
 
+## v0.6.0 — stap 6: livestream, lokaal
+
+- Per camera een **camera-entiteit**: stilstaand beeld = het laatste gebeurtenisbeeld; live beeld op vraag via de HomeBase (geen cloud).
+- Startopdracht per cameratype zoals eufy-security-client op een HomeBase 3; per stream een eigen RSA-sleutel, de HomeBase versleutelt daarmee de AES-sleutel van de frames.
+- Frames (H.264) worden per kijker in MPEG-TS verpakt (PyAV) en via `/api/eufy_lokaal/live/<sn>?token=…` geserveerd; dat is de `stream_source`, zodat go2rtc/WebRTC en HLS werken.
+- Zonder kijkers stopt de stream na 20 s, en na 10 minuten altijd (batterij). Nog zonder geluid.
+- Videopakketten die door elkaar binnenkomen worden weer op volgorde gezet.
+- Naar de HomeBase gaat nog steeds alleen wat nodig is: bewakingsstand, leesvragen, livestream starten/stoppen (broncodetoets).
+
 ## v0.5.4 — einddatum telt niet mee
 
 - De HomeBase leest de einddatum als "tot": de vraag loopt nu van vandaag tot morgen.

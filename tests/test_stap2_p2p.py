@@ -154,11 +154,13 @@ def test_stuurt_niets_dat_iets_verandert():
     code = (MAP / "p2p_sessie.py").read_text()
     code = re.sub(r'"""[\s\S]*?"""', "", code)
     assert "TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})" in code
-    assert "TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})" in code
+    assert "TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO, CMD_STOP_REALTIME_MEDIA})" in code
     assert code.count("self._stuur_opdracht(") == 1
     assert code.count("opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO") == 1
+    assert code.count("opdracht_met_getal(self._volgnr, CMD_STOP_REALTIME_MEDIA") == 1
     assert code.count("opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD") == 1
-    assert code.count("self._verstuur_data(") == 3
+    assert code.count("opdracht_met_tekst(self._volgnr, opdracht, tekst") == 1  # live start (gecontroleerd)
+    assert code.count("self._verstuur_data(") == 5
 
 
 def test_v021_pakketten_tellen_en_meting_loopt_door():

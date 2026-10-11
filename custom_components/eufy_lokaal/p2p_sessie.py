@@ -81,6 +81,13 @@ CMD_SET_PAYLOAD = 1350
 BEWAKINGSSTANDEN = frozenset({0, 1, 2, 3, 4, 5, 47, 63})
 CMD_DATABASE = 1306
 CMD_DATABASE_IMAGE = 1308
+# Stap 6: livestream (alleen kijken)
+CMD_START_REALTIME_MEDIA = 1003
+CMD_STOP_REALTIME_MEDIA = 1004
+CMD_DOORBELL_SET_PAYLOAD = 1700
+COMMAND_START_LIVESTREAM = 1000
+CMD_VIDEO_FRAME = 1300
+CMD_AUDIO_FRAME = 1301
 # Stap 5: alleen opvragen uit de database van de HomeBase, nooit wissen.
 DATABASE_VRAGEN = frozenset({10006, 10013, 10017})  # opnames per datum, laatste info, opnames lokaal
 
@@ -89,11 +96,13 @@ MAX_ZONDER_PONG_S = 30.0
 VERBIND_TIMEOUT_S = 10.0
 
 TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})
-TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})
+TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO, CMD_STOP_REALTIME_MEDIA})
 # Opdrachten die het station versleuteld verwacht (deel van de lijst van
 # eufy-security-client; alleen wat deze integratie stuurt).
-VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO, CMD_SET_PAYLOAD})
+VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO, CMD_SET_PAYLOAD, CMD_STOP_REALTIME_MEDIA,
+                                     CMD_DOORBELL_SET_PAYLOAD})
 ANTWOORD_TIMEOUT_S = 10.0
+MAX_WACHTRIJ = 64
 VRAAG_TIMEOUT_S = 15.0
 CAMERA_INFO_ELKE_S = 600.0
 OPNIEUW_NA_S = 1.0
@@ -161,7 +170,14 @@ def toegestane_payload(j: Any) -> bool:
         return isinstance(p, dict) and p.get("cmd") in DATABASE_VRAGEN
     if j.get("cmd") == CMD_DATABASE_IMAGE:
         return isinstance(p, list) and len(p) == 1 and set(p[0]) == {"file"} and isinstance(p[0]["file"], str)
+    if j.get("cmd") == CMD_START_REALTIME_MEDIA:
+        return isinstance(p, dict)
     return False
+
+
+def toegestane_deurbel_payload(j: Any) -> bool:
+    """Via CMD_DOORBELL_SET_PAYLOAD alleen: livestream starten."""
+    return isinstance(j, dict) and j.get("commandType") == COMMAND_START_LIVESTREAM and isinstance(j.get("data"), dict)
 
 
 def laatste_info_tekst(account_id: str, nu_ms: int) -> str:
@@ -194,13 +210,14 @@ def opdracht_met_tekst(volgnr: int, opdracht: int, tekst: str, sleutel: bytes | 
     """Een DATA-pakket met een JSON-tekst. Alleen CMD_SET_PAYLOAD met daarin
     de bewakingsstand, een databasevraag (lezen) of een afbeelding opvragen;
     al het andere wordt geweigerd."""
-    if opdracht != CMD_SET_PAYLOAD:
+    if opdracht not in (CMD_SET_PAYLOAD, CMD_DOORBELL_SET_PAYLOAD):
         raise ValueError(f"opdracht {opdracht} is niet toegestaan")
     try:
         j = json.loads(tekst)
     except ValueError as err:
         raise ValueError("geen geldige JSON") from err
-    if not toegestane_payload(j):
+    goed = toegestane_payload(j) if opdracht == CMD_SET_PAYLOAD else toegestane_deurbel_payload(j)
+    if not goed:
         raise ValueError("deze opdracht is niet toegestaan")
     data = tekst.encode()
     versleuteld = opdracht in VERSLEUTELDE_OPDRACHTEN and niveau > 0 and sleutel is not None and len(sleutel) == 16
@@ -417,6 +434,8 @@ class P2PSessie:
         self._wacht_op: dict[int, asyncio.Future] = {}  # opdracht -> antwoord (returncode)
         self._laatste_vraag_t = 0.0
         self._rij: list[tuple[str, str]] = []
+        self._wachtrij: dict[int, dict[int, bytes]] = {}
+        self._bij_video: Callable[[DataKop, bytes], None] | None = None
         self._vraag_bezig: float | None = None
 
     def _stuur(self, data: bytes, adres) -> None:
@@ -551,6 +570,22 @@ class P2PSessie:
         self._stuur_payload(tekst, soort)
         asyncio.get_running_loop().call_later(VRAAG_TIMEOUT_S + 0.1, self._volgende_vraag)
 
+    def start_live(self, kanaal: int, opdracht: int, tekst: str) -> None:
+        """Stap 6: livestream van een camera starten (alleen kijken)."""
+        if self._transport is None or self._adres is None or self.sleutel is None:
+            raise ConnectionError("geen versleutelde lokale verbinding")
+        self._bouwer.pop(SOORT_VIDEO, None)
+        self._verstuur_data(opdracht_met_tekst(self._volgnr, opdracht, tekst, self.sleutel,
+                                               self.meting.niveau, kanaal))
+        self.meting.opdrachten_gestuurd["live_start"] = self.meting.opdrachten_gestuurd.get("live_start", 0) + 1
+
+    def stop_live(self, kanaal: int) -> None:
+        if self._transport is None or self._adres is None:
+            return
+        self._verstuur_data(opdracht_met_getal(self._volgnr, CMD_STOP_REALTIME_MEDIA, kanaal,
+                                               self.sleutel, self.meting.niveau, kanaal))
+        self.meting.opdrachten_gestuurd["live_stop"] = self.meting.opdrachten_gestuurd.get("live_stop", 0) + 1
+
     def _verstuur_data(self, pakket: bytes) -> None:
         """Verstuur en houd vast tot het station het bevestigt (ACK)."""
         volgnr = self._volgnr
@@ -617,15 +652,39 @@ class P2PSessie:
             if (volgnr - verwacht) % 0x10000 > 0x8000:
                 self.meting.data_pakket(data, "dubbel")
                 return  # dubbel (al gehad)
+            # te vroeg: bewaren tot het gat dicht is (video komt soms door elkaar)
+            wacht = self._wachtrij.setdefault(soort, {})
+            wacht[volgnr] = data
+            if len(wacht) <= MAX_WACHTRIJ:
+                return
+            # gat blijft open: doorschuiven naar het eerste dat er is
+            self.meting.gaten = getattr(self.meting, "gaten", 0) + 1
+            volgnr = min(wacht, key=lambda v: (v - verwacht) % 0x10000)
+            data = wacht.pop(volgnr)
+            self._bouwer.pop(soort, None)
+        self._verwerk_data(soort, volgnr, data)
+        wacht = self._wachtrij.get(soort) or {}
+        while self._verwacht.get(soort) in wacht:
+            v = self._verwacht[soort]
+            self._verwerk_data(soort, v, wacht.pop(v))
+
+    def _verwerk_data(self, soort: int, volgnr: int, data: bytes) -> None:
         self._verwacht[soort] = (volgnr + 1) % 0x10000
-        if soort not in (SOORT_DATA, SOORT_CONTROL):
+        if soort not in (SOORT_DATA, SOORT_CONTROL, SOORT_VIDEO):
             self.meting.data_pakket(data, f"soort {soort} overgeslagen")
-            return  # video/bestanden: pas in latere stappen
+            return  # bestanden (BINARY): latere stap
         bouwer = self._bouwer.setdefault(soort, Bouwer())
         klaar = bouwer.voeg_toe(data[8:])
         self.meting.data_pakket(
             data, f"{len(klaar)} bericht(en)" if klaar else ("deel" if bouwer.kop else "geen XZYH-kop"))
         for kop, inhoud in klaar:
+            if soort == SOORT_VIDEO:
+                if self._bij_video is not None:
+                    try:
+                        self._bij_video(kop, inhoud)
+                    except Exception as err:  # noqa: BLE001
+                        self.meting.laatste_fout = f"video: {type(err).__name__}: {err}"
+                continue
             self._bericht(kop, inhoud, soort)
 
     def _bericht(self, kop: DataKop, inhoud: bytes, soort: int = SOORT_DATA) -> None:
