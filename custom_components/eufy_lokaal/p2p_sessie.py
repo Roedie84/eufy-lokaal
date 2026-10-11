@@ -82,7 +82,7 @@ BEWAKINGSSTANDEN = frozenset({0, 1, 2, 3, 4, 5, 47, 63})
 CMD_DATABASE = 1306
 CMD_DATABASE_IMAGE = 1308
 # Stap 5: alleen opvragen uit de database van de HomeBase, nooit wissen.
-DATABASE_VRAGEN = frozenset({10013, 10017})  # laatste info, opnames per datum
+DATABASE_VRAGEN = frozenset({10006, 10013, 10017})  # opnames per datum, laatste info, opnames lokaal
 
 HARTSLAG_S = 5.0
 MAX_ZONDER_PONG_S = 30.0
@@ -172,9 +172,10 @@ def laatste_info_tekst(account_id: str, nu_ms: int) -> str:
 
 def opnames_tekst(account_id: str, serienummers: list[str], begin: str, einde: str, nu_ms: int,
                   aantal: int = 20) -> str:
-    """Opnames op de HomeBase tussen twee datums (JJJJMMDD)."""
+    """Opnames op de HomeBase tussen twee datums (JJJJMMDD); 10006 geeft een
+    platte lijst (CMD_DATABASE_QUERY_BY_DATE)."""
     return json.dumps({"account_id": account_id, "cmd": CMD_DATABASE, "mChannel": 0, "mValue3": 0,
-                       "payload": {"cmd": 10017, "payload": {
+                       "payload": {"cmd": 10006, "payload": {
                            "count": aantal, "detection_type": 0,
                            "device_info": [{"device_sn": s} for s in serienummers],
                            "end_date": einde, "event_type": 0, "flag": 0, "res_unzip": 1,

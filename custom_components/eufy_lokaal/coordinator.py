@@ -246,6 +246,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 # De bewakingsstand (1224) kan mee veranderd zijn: parameters verversen.
                 self._ververs_parameters_straks(station_sn)
             if soort == "database":
+                lijst = self.tellingen.setdefault("database_antwoorden", [])
+                lijst.append({**(b.get("samenvatting") or {}), "t": round(nu)})
+                del lijst[:-6]
                 self._bij_database(station_sn, b)
                 self.async_update_listeners()
                 return
@@ -322,9 +325,13 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                         self._beeld_voor[pad] = (sn, nu)
             if nieuw or not self.opnames:
                 self.hass.loop.call_later(2, self._vraag_opnames, station_sn)
-        elif b.get("sub_opdracht") == 10017:
+        elif b.get("sub_opdracht") in (10006, 10017):
             per_apparaat: dict[str, dict[int, dict]] = {}
-            for tabel in b.get("data") or []:
+            if b.get("sub_opdracht") == 10006:  # platte lijst
+                tabellen = [{"table_name": "history_record_info", "payload": b.get("data") or []}]
+            else:
+                tabellen = b.get("data") or []
+            for tabel in tabellen:
                 if tabel.get("table_name") != "history_record_info":
                     continue
                 for r in tabel.get("payload") or []:
@@ -432,6 +439,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "stap": "4 - lokale berichten, parameters en bewakingsstand",
             "laatste_stand_opdracht": t.get("laatste_stand_opdracht"),
             "antwoorden": t.get("antwoorden"),
+            "database_antwoorden": t.get("database_antwoorden"),
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],

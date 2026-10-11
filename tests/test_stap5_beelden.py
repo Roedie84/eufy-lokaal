@@ -106,3 +106,18 @@ def test_vragen_een_voor_een():
 
     eerst, totaal, s = asyncio.run(_proef())
     assert eerst == 1 and totaal == 2 and s.meting.opdrachten_gestuurd == {"afbeelding": 2}
+
+
+def test_url_base64_en_platte_opnames():
+    import base64 as b64
+    jpeg = b"\xff\xd8\xff\xe0" + bytes(range(250))
+    url = b64.urlsafe_b64encode(jpeg).decode().rstrip("=")
+    o = b.ontleed(1308, json.dumps({"file": "/a.jpg", "content": url}).encode())
+    assert o["ruw"] == jpeg
+    from custom_components.eufy_lokaal.coordinator import EufyLokaalCoordinator
+    c = object.__new__(EufyLokaalCoordinator)
+    c.hass, c.stations, c.opnames = MagicMock(), {"T8030": {}}, {}
+    c.apparaten = {"T8113": {"device_sn": "T8113", "station_sn": "T8030"}}
+    c._bij_database("T8030", b.ontleed(1306, json.dumps({"cmd": 10006, "data": [
+        {"record_id": 5, "device_sn": "T8113", "start_time": "2026-10-11 14:25:10", "storage_path": "/v"}]}).encode()))
+    assert c.opnames["T8113"][0]["record_id"] == 5

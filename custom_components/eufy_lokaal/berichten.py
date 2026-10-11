@@ -176,13 +176,17 @@ def ontleed(opdracht: int, inhoud: bytes, resultaat: bool = False, kanaal: int =
         j = json_uit(inhoud)
         if isinstance(j, dict):
             uit.update(soort="database", sub_opdracht=j.get("cmd"), returncode=j.get("mIntRet"),
-                       data=j.get("data") if isinstance(j.get("data"), list) else [])
+                       data=j.get("data") if isinstance(j.get("data"), list) else [],
+                       samenvatting={k: (v if k != "data" else (len(v) if isinstance(v, list) else str(v)[:120]))
+                                     for k, v in j.items()})
         else:
             uit.update(soort="onleesbaar", begin=inhoud[:48].hex())
     elif opdracht == CMD_DATABASE_IMAGE:
         j = json_uit(inhoud)
         if isinstance(j, dict) and j.get("content"):
             inhoud_b64 = "".join(str(j["content"]).split())
+            # deze firmware gebruikt de URL-variant ("-" en "_" in plaats van "+" en "/")
+            inhoud_b64 = inhoud_b64.replace("-", "+").replace("_", "/")
             try:
                 ruw = base64.b64decode(inhoud_b64 + "=" * (-len(inhoud_b64) % 4))
                 fout = None
@@ -199,5 +203,5 @@ def ontleed(opdracht: int, inhoud: bytes, resultaat: bool = False, kanaal: int =
         if j is not None:
             uit.update(soort="json", inhoud=j)
         else:
-            uit.update(soort="onbekend", begin=inhoud[:48].hex())
+            uit.update(soort="onbekend", begin=inhoud[:48].hex(), tekst=tekst(inhoud)[:120])
     return uit

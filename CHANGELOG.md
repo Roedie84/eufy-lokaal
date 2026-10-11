@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.5.2 — alle beelden, opnames per datum
+
+- Afbeeldingen in de URL-variant van base64 (`-`/`_`) worden nu ook gelezen; daardoor ontbrak het beeld van één camera.
+- Opnames via CMD_DATABASE_QUERY_BY_DATE (10006, platte lijst); 10017 blijft herkend.
+- `database_antwoorden` en tekst bij onbekende berichten in de diagnose.
+
 ## v0.5.1 — vragen één voor één
 
 - De HomeBase beantwoordt één databasevraag of afbeelding tegelijk: vragen gaan nu in een rij, de volgende pas na het antwoord (of na 15 s).
