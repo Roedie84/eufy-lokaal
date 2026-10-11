@@ -56,9 +56,8 @@ def _apparaat_info(c: EufyLokaalCoordinator, sn: str) -> DeviceInfo:
         identifiers={(DOMAIN, sn)}, name=a.get("device_name") or sn, manufacturer="Eufy",
         model=a.get("device_model"), sw_version=a.get("main_sw_version"), serial_number=sn,
     )
-    station = a.get("station_sn")
-    if station and station != sn and station in c.stations:
-        info["via_device"] = (DOMAIN, station)
+    # Geen via_device meer (verouderd in Home Assistant; geeft een fout bij
+    # platforms die buiten de integratie-frame worden toegevoegd).
     return info
 
 

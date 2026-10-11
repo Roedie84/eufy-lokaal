@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.6.1 — camera's van alle apparaten
+
+- `via_device` weggelaten: Home Assistant weigerde daardoor de camera-entiteiten van twee van de drie camera's.
+
 ## v0.6.0 — stap 6: livestream, lokaal
 
 - Per camera een **camera-entiteit**: stilstaand beeld = het laatste gebeurtenisbeeld; live beeld op vraag via de HomeBase (geen cloud).
