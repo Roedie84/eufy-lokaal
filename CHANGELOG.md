@@ -1,5 +1,16 @@
 # Changelog — Eufy Lokaal
 
+## v0.1.1 — de HomeBase lokaal zoeken op het goede adres
+
+Eerste meting 11-10 13:00: ingelogd, 1 station (HomeBase T8030) en 3
+apparaten gevonden, maar "niet lokaal gevonden". Oorzaak: `ip_addr` uit de
+cloud is het publieke IP (86.88.x.x), dus de zoekvraag ging het internet op.
+Nu: het LAN-adres uit stationparameter 1176 (CMD_GET_HUB_LAN_IP, alleen als
+het een thuisnetadres is), de broadcast daarvan, de broadcastadressen van
+Home Assistant zelf en 255.255.255.255 - nooit een publiek adres. De sensor
+IP-adres toont het LAN-adres (het publieke staat als attribuut). De
+gebruikte zoekadressen staan in de sensor "Eufy lokaal".
+
 ## v0.1.0 — stap 1: inventaris uit de cloud en de stations lokaal vinden
 
 Gevraagd 11-10-2026: "Kun je ook de eufy zaken lokaal implementeren? Dit zou

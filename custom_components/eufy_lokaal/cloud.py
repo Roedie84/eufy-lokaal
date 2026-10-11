@@ -318,3 +318,4 @@ def parameter(item: dict, soort: int) -> Any:
 PARAM_BATTERIJ = 1101
 PARAM_WIFI_RSSI = 1142
 PARAM_ALARMSTAND = 1224
+PARAM_LAN_IP = 1176

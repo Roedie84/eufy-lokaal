@@ -147,8 +147,14 @@ class StationIpSensor(_Station):
 
     @property
     def native_value(self) -> str | None:
+        from .coordinator import lan_ip
+
         l = self.coordinator.lokaal.get(self._sn) or {}
-        return l.get("ip") or self._s.get("ip_addr")
+        return l.get("ip") or lan_ip(self._s)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"publiek_ip": self._s.get("ip_addr")}
 
 
 class _Apparaat(_Basis):
