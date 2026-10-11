@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.9 — beweging sneller in HA
+
+- Na elk bericht van een camera (wakker, beweging, live) wordt de laatste info na 3, 15, 40 en 75 s opgevraagd. Een opname staat pas in de database als hij klaar is; zo zie je beweging en beeld binnen ongeveer een minuut in plaats van tot 5 minuten later.
+
 ## v0.7.8 — beweging van camera's
 
 - De HomeBase stuurt lokaal geen bewegingsbericht (2037) voor camera's; alleen aanbellen komt zo binnen. Beweging wordt nu herkend aan de gebeurtenisteller in de database: loopt die op, dan gaat *Beweging* 30 s aan en verschijnt het nieuwe beeld.

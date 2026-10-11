@@ -103,4 +103,4 @@ def test_camera_actief_vraagt_laatste_info():
     bij(bericht)
     bij(bericht)  # binnen 20 s: niet nog eens
     vertragingen = [a[0][0] for a in c.hass.loop.call_later.call_args_list]
-    assert vertragingen.count(3) == 1 and vertragingen.count(12) == 1
+    assert [v for v in vertragingen if v != 8] == [3, 15, 40, 75]

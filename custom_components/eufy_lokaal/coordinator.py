@@ -16,7 +16,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import p2p
-from .berichten import (CMD_CAMERA_ACTIEF, KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND,
+from .berichten import (KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND,
                         alarmstand_naam)
 from .p2p_sessie import P2PSessie
 from .cloud import PARAM_LAN_IP, CaptchaNodig, CloudFout, EMailCodeNodig, EufyCloud, Sessie, parameter
@@ -282,10 +282,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if soort in ("melding", "alarmstand", "vertraagd_alarm", "alarm_ingeschakeld"):
                 # na een gebeurtenis staat er vaak een nieuw beeld klaar
                 self.hass.loop.call_later(8, self._vraag_laatste_info, station_sn)
-            elif b.get("opdracht") == CMD_CAMERA_ACTIEF and int(b.get("kanaal", KANAAL_STATION)) not in (
-                    KANAAL_STATION, KANAAL_BINNEN):
-                # v0.7.8: een camera die wakker wordt (bijv. door beweging) meldt zich met 1400;
-                # de beweging zelf blijkt pas uit een nieuwe opname in de database.
+            if int(b.get("kanaal", KANAAL_STATION)) not in (KANAAL_STATION, KANAAL_BINNEN) and \
+                    soort in ("melding", "onbekend"):
+                # v0.7.8: een camera die iets meldt (wakker, beweging, live) kan zo een nieuwe opname hebben
                 self._vraag_info_na_activiteit(station_sn)
             if soort == "antwoord":
                 lijst = self.tellingen.setdefault("antwoorden", [])
@@ -504,8 +503,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         if nu - gevraagd.get(station_sn, 0) < 20:
             return
         gevraagd[station_sn] = nu
-        self.hass.loop.call_later(3, self._vraag_laatste_info, station_sn)
-        self.hass.loop.call_later(12, self._vraag_laatste_info, station_sn)
+        # De opname staat pas in de database als hij klaar is (vaak 20-60 s): een paar keer kijken.
+        for na_s in (3, 15, 40, 75):
+            self.hass.loop.call_later(na_s, self._vraag_laatste_info, station_sn)
 
     def _beweging_uit_teller(self, station_sn: str, sn: str, oud, nieuw, nu: float) -> None:
         """v0.7.8: de HomeBase stuurt lokaal geen 2037 bij beweging van een camera; wel loopt
