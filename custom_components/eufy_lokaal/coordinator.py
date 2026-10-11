@@ -337,6 +337,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
                               (nu + timedelta(days=1)).strftime("%Y%m%d"),
                               int(time.time() * 1000), aantal=50), "opnames")
+        # v0.7.12: ook de uitsneden (wat er gezien is: persoon, voertuig, dier, ...)
+        s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
+                              (nu + timedelta(days=1)).strftime("%Y%m%d"),
+                              int(time.time() * 1000) + 1, aantal=50, vraag=10017,
+                              vanaf=(nu - timedelta(minutes=15)).strftime("%Y%m%d%H%M%S")), "uitsneden")
 
     def _bij_database(self, station_sn: str, b: dict) -> None:
         from .p2p_sessie import afbeelding_tekst
@@ -365,12 +370,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                         self._beeld_voor[pad] = (sn, nu)
             if nieuw or not self.opnames:
                 self.hass.loop.call_later(2, self._vraag_opnames, station_sn)
-        elif b.get("sub_opdracht") in (10006, 10017):
+        elif b.get("sub_opdracht") == 10017:
+            self._bij_uitsneden(station_sn, b.get("data") or [], nu)
+        elif b.get("sub_opdracht") == 10006:
             per_apparaat: dict[str, dict[int, dict]] = {}
-            if b.get("sub_opdracht") == 10006:  # platte lijst
-                tabellen = [{"table_name": "history_record_info", "payload": b.get("data") or []}]
-            else:
-                tabellen = b.get("data") or []
+            tabellen = [{"table_name": "history_record_info", "payload": b.get("data") or []}]
             for tabel in tabellen:
                 if tabel.get("table_name") != "history_record_info":
                     continue
@@ -384,6 +388,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             for sn, records in per_apparaat.items():
                 self.opnames[sn] = sorted(records.values(), key=lambda r: str(r.get("start_time")),
                                           reverse=True)[:20]
+                for r in self.opnames[sn][:5]:
+                    self._meld_opname(station_sn, sn, r, nu)
             for sn in [a for a, x in self.apparaten.items() if x.get("station_sn") == station_sn]:
                 self.opnames.setdefault(sn, [])
 
@@ -498,6 +504,72 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             return int(w) if w is not None else None
         except ValueError:
             return None
+
+    def _bij_uitsneden(self, station_sn: str, tabellen: list, nu: float) -> None:
+        """10017: per opname de detectiebits (OR van alle uitsneden) en of de persoon bekend is."""
+        uitsneden = self.__dict__.setdefault("uitsneden", {})
+        opnames_per_id: dict = {}
+        for tabel in tabellen:
+            if not isinstance(tabel, dict):
+                continue
+            for r in tabel.get("payload") or []:
+                rid = r.get("record_id")
+                if rid is None:
+                    continue
+                if tabel.get("table_name") == "record_crop_picture_info":
+                    u = uitsneden.setdefault(rid, {"bits": 0, "bekend": False, "ruw": []})
+                    try:
+                        u["bits"] |= int(r.get("detection_type") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                    if (r.get("person_id") or 0) > 0:
+                        u["bekend"] = True
+                    if len(u["ruw"]) < 5:
+                        u["ruw"].append({k: r.get(k) for k in ("detection_type", "person_id", "crop_path",
+                                                              "event_time", "person_recog_flag")})
+                elif tabel.get("table_name") == "history_record_info":
+                    opnames_per_id[rid] = r
+        while len(uitsneden) > 300:
+            uitsneden.pop(next(iter(uitsneden)))
+        for rid, r in opnames_per_id.items():
+            if r.get("device_sn"):
+                self._meld_opname(station_sn, r["device_sn"], r, nu)
+
+    def _meld_opname(self, station_sn: str, sn: str, r: dict, nu: float) -> None:
+        """v0.7.12: een (nieuwe) opname als gebeurtenis(sen): persoon, voertuig, huisdier, ...
+        Alleen opnames van de laatste 10 minuten, en elke soort per opname één keer."""
+        from homeassistant.util import dt as dt_util
+
+        from .gebeurtenissen import soorten_uit_opname
+
+        if sn not in self.apparaten:
+            return
+        begin = dt_util.parse_datetime(str(r.get("start_time") or "").replace(" ", "T"))
+        if begin is None:
+            return
+        if begin.tzinfo is None:
+            begin = begin.replace(tzinfo=dt_util.get_default_time_zone())
+        if nu - begin.timestamp() > 600:
+            return
+        rid = r.get("record_id")
+        u = (self.__dict__.get("uitsneden") or {}).get(rid) or {}
+        gemeld = self.__dict__.setdefault("_gemeld", {})
+        al = gemeld.setdefault(rid, set())
+        while len(gemeld) > 300:
+            gemeld.pop(next(iter(gemeld)))
+        vorige = self.laatste_gebeurtenis.get(sn) or {}
+        for soort in soorten_uit_opname(r.get("trigger_type"), u.get("bits", 0), u.get("bekend", False)):
+            if soort in al:
+                continue
+            al.add(soort)
+            # beweging en aanbellen zijn er vaak al (teller of pushbericht)
+            if soort in ("beweging", "aangebeld") and vorige.get("soort") in ("beweging", "aangebeld") and \
+                    nu - (vorige.get("tijd") or 0) < 120:
+                continue
+            self._gebeurtenis(station_sn, {"soort": soort, "event_type": None, "apparaat_sn": sn,
+                                           "persoon": None, "bron": "opname", "opname": rid,
+                                           "trigger_type": r.get("trigger_type"),
+                                           "detectie": u.get("bits", 0)}, nu)
 
     def _vraag_info_na_activiteit(self, station_sn: str) -> None:
         """Na activiteit van een camera twee keer de laatste info vragen (hooguit eens per 20 s)."""

@@ -65,10 +65,10 @@ def test_coordinator_beelden_en_opnames():
     assert soort == "afbeelding" and json.loads(tekst)["payload"] == [{"file": "/a.jpg"}]
     c._bij_afbeelding("T8030", {"bestand": "/a.jpg", "ruw": b"\xff\xd8abc"})
     assert c.beelden["T8113"]["data"] == b"\xff\xd8abc"
-    c._bij_database("T8030", b.ontleed(1306, json.dumps({"cmd": 10017, "data": [
-        {"table_name": "history_record_info", "payload": [
+    c.laatste_gebeurtenis = {}
+    c._bij_database("T8030", b.ontleed(1306, json.dumps({"cmd": 10006, "data": [
             {"record_id": 1, "device_sn": "T8113", "start_time": "2026-10-11 10:00:00", "storage_path": "/v1"},
-            {"record_id": 2, "device_sn": "T8113", "start_time": "2026-10-11 12:00:00", "storage_path": "/v2"}]}]}).encode()))
+            {"record_id": 2, "device_sn": "T8113", "start_time": "2026-10-11 12:00:00", "storage_path": "/v2"}]}).encode()))
     assert [o["record_id"] for o in c.opnames["T8113"]] == [2, 1]
 
 

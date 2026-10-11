@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.12 — persoon, huisdier, voertuig, geluid en pakket
+
+- Uit de database van de HomeBase: `trigger_type` (4 = persoon, 8 = aanbellen) van elke opname en de uitsneden (`detection_type`: 1/2 persoon, 4 voertuig, 8 huisdier, 128 geluid, 256 huilen, 512/1024 pakket) via een lokale databasevraag (10017). Elke nieuwe opname (laatste 10 minuten) zet de bijbehorende detecties aan en geeft een gebeurtenis, één keer per soort.
+- Een bekende persoon (person_id) wordt *bekend_persoon*.
+
 ## v0.7.11 — beelden direct na het opstarten
 
 - Zodra de lokale sessie staat, worden laatste beelden en opnames meteen opgevraagd. Lukte de eerste verbinding niet, dan bleven ze tot 5 minuten onbeschikbaar.

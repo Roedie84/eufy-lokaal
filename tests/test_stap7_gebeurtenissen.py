@@ -104,3 +104,60 @@ def test_camera_actief_vraagt_laatste_info():
     bij(bericht)  # binnen 20 s: niet nog eens
     vertragingen = [a[0][0] for a in c.hass.loop.call_later.call_args_list]
     assert [v for v in vertragingen if v != 8] == [3, 15, 40, 75]
+
+
+def test_soorten_uit_opname():
+    from custom_components.eufy_lokaal.gebeurtenissen import soorten_uit_opname
+
+    assert soorten_uit_opname(2) == ["beweging"]
+    assert soorten_uit_opname(4) == ["onbekend_persoon"]
+    assert soorten_uit_opname(8) == ["aangebeld"]
+    assert soorten_uit_opname(2, 8) == ["huisdier"]
+    assert soorten_uit_opname(2, 4 | 2) == ["onbekend_persoon", "voertuig"]
+    assert soorten_uit_opname(4, 0, bekend_persoon=True) == ["bekend_persoon"]
+    assert soorten_uit_opname(2, 1024) == ["pakket_bezorgd"]
+
+
+def _opname(rid, trigger, minuten_geleden=1):
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    t = dt_util.now() - timedelta(minutes=minuten_geleden)
+    return {"record_id": rid, "device_sn": "T8416", "trigger_type": trigger,
+            "start_time": t.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+def test_opname_geeft_persoon_en_dier_eenmalig():
+    c = _coord()
+    bij = c._bij_bericht_voor("T8030")
+    lijst = {"soort": "database", "naam": "database", "kanaal": 255, "sub_opdracht": 10006,
+             "data": [_opname(1, 4), _opname(2, 2, minuten_geleden=30)]}
+    bij(lijst)
+    assert c.detectie_aan("T8416", "persoon")
+    assert not c.detectie_aan("T8416", "huisdier")
+    soorten = [a[0][1]["soort"] for a in c.hass.bus.async_fire.call_args_list if a[0][0] == "eufy_lokaal_gebeurtenis"]
+    assert soorten == ["onbekend_persoon"]  # opname van 30 min geleden telt niet
+    bij(lijst)  # nog eens: niet opnieuw melden
+    uitsneden = {"soort": "database", "naam": "database", "kanaal": 255, "sub_opdracht": 10017,
+                 "data": [{"table_name": "history_record_info", "payload": [_opname(1, 4)]},
+                          {"table_name": "record_crop_picture_info",
+                           "payload": [{"record_id": 1, "detection_type": 8, "person_id": 0}]}]}
+    bij(uitsneden)
+    soorten = [a[0][1]["soort"] for a in c.hass.bus.async_fire.call_args_list if a[0][0] == "eufy_lokaal_gebeurtenis"]
+    assert soorten == ["onbekend_persoon", "huisdier"]
+    assert c.detectie_aan("T8416", "huisdier")
+
+
+def test_uitsneden_tekst_veilig():
+    import json as _j
+
+    from custom_components.eufy_lokaal import p2p_sessie as p
+
+    t = _j.loads(p.opnames_tekst("a", ["T8416"], "20261011", "20261012", 1, vraag=10017, vanaf="20261011213000"))
+    assert t["payload"]["cmd"] == 10017 and t["payload"]["payload"]["start_time"] == "20261011213000"
+    assert p.toegestane_payload(t)
+    import pytest
+
+    with pytest.raises(ValueError):
+        p.opnames_tekst("a", ["T8416"], "20261011", "20261012", 1, vraag=10099)

@@ -54,3 +54,32 @@ def gebeurtenis_uit(melding: dict) -> dict[str, Any] | None:
         "persoon": binnen.get("person_name") or None, "tijd_station": binnen.get("event_time"),
         "kanaal": binnen.get("channel"), "ruw": {k: v for k, v in binnen.items() if k not in ("pic_url",)},
     }
+
+
+# v0.7.12: soorten uit de database van de HomeBase (eufy-security-client: TriggerType, FilterDetectType)
+TRIGGER_PERSOON, TRIGGER_BEL = 4, 8
+DETECTIE_BITS = [
+    (1, "onbekend_persoon"), (2, "onbekend_persoon"), (4, "voertuig"), (8, "huisdier"), (128, "geluid"),
+    (256, "huilen"), (512, "pakket_opgehaald"), (1024, "pakket_bezorgd"), (2048, "pakket_bezorgd"),
+]
+
+
+def soorten_uit_opname(trigger_type, detectie_bits: int = 0, bekend_persoon: bool = False) -> list[str]:
+    """Welke gebeurtenissen bij een opname horen (zonder dubbelen, in vaste volgorde)."""
+    uit: list[str] = []
+    try:
+        t = int(trigger_type or 0)
+    except (TypeError, ValueError):
+        t = 0
+    if t & TRIGGER_BEL:
+        uit.append("aangebeld")
+    if t & TRIGGER_PERSOON:
+        uit.append("onbekend_persoon")
+    for bit, soort in DETECTIE_BITS:
+        if detectie_bits & bit and soort not in uit:
+            uit.append(soort)
+    if bekend_persoon and "onbekend_persoon" in uit:
+        uit[uit.index("onbekend_persoon")] = "bekend_persoon"
+    if not uit:
+        uit.append("beweging")
+    return uit
