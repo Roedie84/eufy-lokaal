@@ -79,6 +79,10 @@ CMD_PING = 1139
 CMD_SET_ARMING = 1224
 CMD_SET_PAYLOAD = 1350
 BEWAKINGSSTANDEN = frozenset({0, 1, 2, 3, 4, 5, 47, 63})
+CMD_DATABASE = 1306
+CMD_DATABASE_IMAGE = 1308
+# Stap 5: alleen opvragen uit de database van de HomeBase, nooit wissen.
+DATABASE_VRAGEN = frozenset({10013, 10017})  # laatste info, opnames per datum
 
 HARTSLAG_S = 5.0
 MAX_ZONDER_PONG_S = 30.0
@@ -145,19 +149,57 @@ def bewakingsstand_tekst(account_id: str, stand: int, gebruiker: str) -> str:
                        "payload": {"mode_type": stand, "user_name": gebruiker}}, separators=(",", ":"))
 
 
+def toegestane_payload(j: Any) -> bool:
+    """Wat er via CMD_SET_PAYLOAD naar de HomeBase mag."""
+    if not isinstance(j, dict):
+        return False
+    p = j.get("payload")
+    if j.get("cmd") == CMD_SET_ARMING:
+        return isinstance(p, dict) and p.get("mode_type") in BEWAKINGSSTANDEN
+    if j.get("cmd") == CMD_DATABASE:
+        return isinstance(p, dict) and p.get("cmd") in DATABASE_VRAGEN
+    if j.get("cmd") == CMD_DATABASE_IMAGE:
+        return isinstance(p, list) and len(p) == 1 and set(p[0]) == {"file"} and isinstance(p[0]["file"], str)
+    return False
+
+
+def laatste_info_tekst(account_id: str, nu_ms: int) -> str:
+    return json.dumps({"account_id": account_id, "cmd": CMD_DATABASE, "mChannel": 0, "mValue3": 0,
+                       "payload": {"cmd": 10013, "table": "history_record_info",
+                                   "transaction": str(nu_ms)}}, separators=(",", ":"))
+
+
+def opnames_tekst(account_id: str, serienummers: list[str], begin: str, einde: str, nu_ms: int,
+                  aantal: int = 20) -> str:
+    """Opnames op de HomeBase tussen twee datums (JJJJMMDD)."""
+    return json.dumps({"account_id": account_id, "cmd": CMD_DATABASE, "mChannel": 0, "mValue3": 0,
+                       "payload": {"cmd": 10017, "payload": {
+                           "count": aantal, "detection_type": 0,
+                           "device_info": [{"device_sn": s} for s in serienummers],
+                           "end_date": einde, "event_type": 0, "flag": 0, "res_unzip": 1,
+                           "start_date": begin, "start_time": f"{begin}000000", "storage_cloud": -1,
+                           "ai_type": 0},
+                           "table": "history_record_info", "transaction": str(nu_ms)}}, separators=(",", ":"))
+
+
+def afbeelding_tekst(account_id: str, bestand: str) -> str:
+    return json.dumps({"account_id": account_id, "cmd": CMD_DATABASE_IMAGE, "mChannel": KANAAL_STATION,
+                       "payload": [{"file": bestand}], "transaction": bestand}, separators=(",", ":"))
+
+
 def opdracht_met_tekst(volgnr: int, opdracht: int, tekst: str, sleutel: bytes | None = None,
                        niveau: int = 0, kanaal: int = KANAAL_STATION) -> bytes:
     """Een DATA-pakket met een JSON-tekst. Alleen CMD_SET_PAYLOAD met daarin
-    CMD_SET_ARMING en een geldige stand; al het andere wordt geweigerd."""
+    de bewakingsstand, een databasevraag (lezen) of een afbeelding opvragen;
+    al het andere wordt geweigerd."""
     if opdracht != CMD_SET_PAYLOAD:
         raise ValueError(f"opdracht {opdracht} is niet toegestaan")
     try:
         j = json.loads(tekst)
     except ValueError as err:
         raise ValueError("geen geldige JSON") from err
-    if not isinstance(j, dict) or j.get("cmd") != CMD_SET_ARMING or \
-            (j.get("payload") or {}).get("mode_type") not in BEWAKINGSSTANDEN:
-        raise ValueError("alleen de bewakingsstand mag gezet worden")
+    if not toegestane_payload(j):
+        raise ValueError("deze opdracht is niet toegestaan")
     data = tekst.encode()
     versleuteld = opdracht in VERSLEUTELDE_OPDRACHTEN and niveau > 0 and sleutel is not None and len(sleutel) == 16
     if versleuteld:
@@ -371,6 +413,7 @@ class P2PSessie:
         self._open: dict[int, tuple[bytes, int, float]] = {}  # volgnr -> (pakket, pogingen, tijd)
         self._camera_info_t = 0.0
         self._wacht_op: dict[int, asyncio.Future] = {}  # opdracht -> antwoord (returncode)
+        self._laatste_vraag_t = 0.0
 
     def _stuur(self, data: bytes, adres) -> None:
         if self._transport is None:
@@ -457,16 +500,34 @@ class P2PSessie:
         oud = self._wacht_op.pop(CMD_SET_PAYLOAD, None)
         if oud is not None and not oud.done():
             oud.cancel()
+        # Een vraag die net weg is, kan zijn antwoord nog onderweg hebben: even wachten,
+        # zodat de returncode echt bij de bewakingsstand hoort.
+        rust = 1.0 - (time.monotonic() - self._laatste_vraag_t)
+        if rust > 0:
+            await asyncio.sleep(rust)
         wacht = asyncio.get_running_loop().create_future()
         self._wacht_op[CMD_SET_PAYLOAD] = wacht
-        self._verstuur_data(opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD, tekst,
-                                               self.sleutel, self.meting.niveau))
-        self.meting.opdrachten_gestuurd[str(CMD_SET_PAYLOAD)] = \
-            self.meting.opdrachten_gestuurd.get(str(CMD_SET_PAYLOAD), 0) + 1
+        self._stuur_payload(tekst, "bewakingsstand")
         try:
             return await asyncio.wait_for(wacht, ANTWOORD_TIMEOUT_S)
         finally:
             self._wacht_op.pop(CMD_SET_PAYLOAD, None)
+
+    def _stuur_payload(self, tekst: str, soort: str) -> None:
+        self._verstuur_data(opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD, tekst,
+                                               self.sleutel, self.meting.niveau))
+        self.meting.opdrachten_gestuurd[soort] = self.meting.opdrachten_gestuurd.get(soort, 0) + 1
+
+    def vraag(self, tekst: str, soort: str) -> bool:
+        """Stap 5: een leesvraag (database, afbeelding). Niet terwijl de
+        bewakingsstand op antwoord wacht."""
+        if self._transport is None or self._adres is None or self.sleutel is None:
+            return False
+        if CMD_SET_PAYLOAD in self._wacht_op:
+            return False
+        self._laatste_vraag_t = time.monotonic()
+        self._stuur_payload(tekst, soort)
+        return True
 
     def _verstuur_data(self, pakket: bytes) -> None:
         """Verstuur en houd vast tot het station het bevestigt (ACK)."""

@@ -34,7 +34,7 @@ async def async_setup_entry(
                        ParametersSensor(c, sn, station=True)]
     for sn, a in c.apparaten.items():
         if sn not in c.stations:
-            entiteiten.append(ParametersSensor(c, sn, station=False))
+            entiteiten += [ParametersSensor(c, sn, station=False), OpnamesSensor(c, sn)]
         if parameter(a, PARAM_BATTERIJ) is not None:
             entiteiten.append(ApparaatBatterijSensor(c, sn))
         if parameter(a, PARAM_WIFI_RSSI) is not None:
@@ -222,6 +222,36 @@ class ParametersSensor(_Basis):
     @property
     def extra_state_attributes(self) -> dict:
         return {"parameters": {str(k): v for k, v in sorted(self.coordinator.lokale_parameters(self._sn).items())}}
+
+
+class OpnamesSensor(_Basis):
+    """Stap 5: opnames van gisteren en vandaag op de HomeBase."""
+
+    _attr_name = "Opnames"
+    _attr_icon = "mdi:filmstrip-box-multiple"
+    _attr_native_unit_of_measurement = "opnames"
+    _unrecorded_attributes = frozenset({"opnames"})
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c)
+        self._sn = sn
+        self._attr_unique_id = f"{sn}_opnames"
+        self._attr_device_info = _apparaat_info(c, sn)
+
+    @property
+    def available(self) -> bool:
+        return self._sn in self.coordinator.opnames
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.opnames.get(self._sn) or [])
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        o = self.coordinator.opnames.get(self._sn) or []
+        return {"laatste_start": o[0].get("start_time") if o else None,
+                "laatste_einde": o[0].get("end_time") if o else None,
+                "opnames": o[:10]}
 
 
 class StationFirmwareSensor(_Station):

@@ -98,6 +98,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.alarmstand: dict[str, dict] = {}
         self.laatste_melding: dict[str, dict] = {}
         self.berichten_per_soort: dict[str, int] = {}
+        # stap 5: laatste gebeurtenis, beelden en opnames
+        self.laatste_info: dict[str, dict] = {}
+        self.beelden: dict[str, dict] = {}
+        self.opnames: dict[str, list] = {}
+        self._beeld_voor: dict[str, tuple[str, float]] = {}  # bestand op de HomeBase -> (apparaat, gevraagd)
+        self._info_ronde = 0
 
     # cloud ----------------------------------------------------------------------
 
@@ -166,6 +172,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 "laatst_gezien": nu, "laatst_gezocht": nu,
             }
         await self._houd_sessies()
+        self._info_ronde += 1
+        if self._info_ronde % 5 == 1:  # elke 5 minuten (en meteen na de start)
+            for sn in self.sessies:
+                self.hass.loop.call_later(15, self._vraag_laatste_info, sn)
         self.async_update_listeners()
 
     # stap 2: de P2P-sessie ------------------------------------------------------------
@@ -235,6 +245,17 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                                "bron": "melding station", "sinds": nu}
                 # De bewakingsstand (1224) kan mee veranderd zijn: parameters verversen.
                 self._ververs_parameters_straks(station_sn)
+            if soort == "database":
+                self._bij_database(station_sn, b)
+                self.async_update_listeners()
+                return
+            if soort == "afbeelding":
+                self._bij_afbeelding(station_sn, b)
+                self.async_update_listeners()
+                return
+            if soort in ("melding", "alarmstand", "vertraagd_alarm", "alarm_ingeschakeld"):
+                # na een gebeurtenis staat er vaak een nieuw beeld klaar
+                self.hass.loop.call_later(8, self._vraag_laatste_info, station_sn)
             if soort in ("ping", "antwoord", "camera_info"):
                 self.async_update_listeners()
                 return
@@ -244,6 +265,92 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             self.hass.bus.async_fire(f"{DOMAIN}_bericht", gebeurtenis)
             self.async_update_listeners()
         return bij_bericht
+
+    # stap 5: beelden en opnames -------------------------------------------------------
+
+    def _account(self, station_sn: str) -> str:
+        lid = (self.stations.get(station_sn) or {}).get("member") or {}
+        return str(lid.get("admin_user_id") or self.cloud.sessie.user_id or "")
+
+    def _vraag_laatste_info(self, station_sn: str) -> None:
+        from .p2p_sessie import laatste_info_tekst
+
+        s = self.sessies.get(station_sn)
+        if s is not None and s.levend:
+            s.vraag(laatste_info_tekst(self._account(station_sn), int(time.time() * 1000)), "laatste_info")
+
+    def _vraag_opnames(self, station_sn: str) -> None:
+        from homeassistant.util import dt as dt_util
+
+        from .p2p_sessie import opnames_tekst
+
+        s = self.sessies.get(station_sn)
+        apparaten = [sn for sn, a in self.apparaten.items() if a.get("station_sn") == station_sn and sn != station_sn]
+        if s is None or not s.levend or not apparaten:
+            return
+        vandaag = dt_util.now()
+        begin = (vandaag - timedelta(days=1)).strftime("%Y%m%d")
+        s.vraag(opnames_tekst(self._account(station_sn), apparaten, begin, vandaag.strftime("%Y%m%d"),
+                              int(time.time() * 1000)), "opnames")
+
+    def _bij_database(self, station_sn: str, b: dict) -> None:
+        from .p2p_sessie import afbeelding_tekst
+
+        nu = time.time()
+        if b.get("sub_opdracht") == 10013:
+            nieuw = False
+            for r in b.get("data") or []:
+                sn = r.get("device_sn")
+                p = r.get("payload") or {}
+                if not sn:
+                    continue
+                pad = p.get("crop_hb3_path") or ""
+                vorig = self.laatste_info.get(sn) or {}
+                self.laatste_info[sn] = {"gebeurtenissen": p.get("event_count"), "pad": pad or None,
+                                         "cloud_pad": p.get("crop_cloud_path") or None, "tijd": nu}
+                if vorig.get("gebeurtenissen") != p.get("event_count"):
+                    nieuw = True
+                gevraagd = self._beeld_voor.get(pad)
+                if pad and (self.beelden.get(sn) or {}).get("pad") != pad and \
+                        (gevraagd is None or nu - gevraagd[1] > 120):
+                    s = self.sessies.get(station_sn)
+                    if s is not None and s.vraag(afbeelding_tekst(self._account(station_sn), pad), "afbeelding"):
+                        self._beeld_voor[pad] = (sn, nu)
+            if nieuw or not self.opnames:
+                self.hass.loop.call_later(2, self._vraag_opnames, station_sn)
+        elif b.get("sub_opdracht") == 10017:
+            per_apparaat: dict[str, dict[int, dict]] = {}
+            for tabel in b.get("data") or []:
+                if tabel.get("table_name") != "history_record_info":
+                    continue
+                for r in tabel.get("payload") or []:
+                    sn = r.get("device_sn")
+                    if not sn:
+                        continue
+                    per_apparaat.setdefault(sn, {})[r.get("record_id")] = {
+                        k: r.get(k) for k in ("record_id", "start_time", "end_time", "storage_path",
+                                              "thumb_path", "trigger_type", "video_type", "storage_type",
+                                              "frame_num", "cloud_path")
+                    }
+            for sn, records in per_apparaat.items():
+                self.opnames[sn] = sorted(records.values(), key=lambda r: str(r.get("start_time")),
+                                          reverse=True)[:20]
+            for sn in [a for a, x in self.apparaten.items() if x.get("station_sn") == station_sn]:
+                self.opnames.setdefault(sn, [])
+
+    def _bij_afbeelding(self, station_sn: str, b: dict) -> None:
+        from .berichten import ontsleutel_afbeelding
+
+        pad = b.get("bestand") or ""
+        gevraagd = self._beeld_voor.pop(pad, None)
+        if gevraagd is None:
+            return
+        sn = gevraagd[0]
+        did = (self.stations.get(station_sn) or {}).get("p2p_did", "")
+        data = ontsleutel_afbeelding(did, b.get("ruw") or b"")
+        if data[:2] != b"\xff\xd8":
+            self.tellingen["laatste_fout"] = f"afbeelding {pad}: geen JPEG ({data[:4].hex()})"
+        self.beelden[sn] = {"pad": pad, "data": data, "tijd": time.time(), "grootte": len(data)}
 
     def _ververs_parameters_straks(self, station_sn: str, na_s: float = 3.0) -> None:
         s = self.sessies.get(station_sn)
@@ -335,4 +442,6 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "lokale_parameters": {sn: {str(k): len(v) for k, v in kanalen.items()}
                                   for sn, kanalen in self.lokale_params.items()},
             "alarmstand": self.alarmstand,
+            "beelden": {sn: {k: v for k, v in b.items() if k != "data"} for sn, b in self.beelden.items()},
+            "opnames": {sn: len(v) for sn, v in self.opnames.items()},
         }

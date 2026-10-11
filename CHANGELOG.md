@@ -1,5 +1,12 @@
 # Changelog — Eufy Lokaal
 
+## v0.5.0 — stap 5: laatste beeld en opnames, lokaal
+
+- Per camera een **Laatste beeld** (image-entiteit): de HomeBase geeft het pad van het laatste gebeurtenisbeeld (database, 10013), de integratie haalt de JPEG lokaal op (CMD_DATABASE_IMAGE, 1308). Beelden met de kop "eufysecurity" worden ontsleuteld (getoetst tegen eufy-security-client).
+- Per camera **Opnames**: opnames van gisteren en vandaag op de HomeBase (database, 10017), de laatste 10 met tijden en pad in de attributen.
+- Elke 5 minuten bijgewerkt, en 8 s na elke melding of wisseling van de alarmstand.
+- Naar de database gaan alleen leesvragen (10013, 10017); wissen of wijzigen wordt geweigerd (toets).
+
 ## v0.4.0 — stap 4: bewakingsstand lokaal instellen
 
 - Nieuw: **Bewakingsstand** (select: weg, thuis, schema, aangepast 1-3, geofence, uitgeschakeld) en **Alarm** (alarmpaneel: weg, thuis, aangepast, uitschakelen) per HomeBase.

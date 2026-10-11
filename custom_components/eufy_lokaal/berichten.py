@@ -22,6 +22,10 @@ CMD_NOTIFY_PAYLOAD = 1351
 CMD_DOORBELL_NOTIFY_PAYLOAD = 1701
 CMD_PING = 1139
 CMD_GATEWAYINFO = 1100
+CMD_DATABASE = 1306
+CMD_DATABASE_IMAGE = 1308
+DB_QUERY_LATEST_INFO = 10013
+DB_QUERY_LOCAL = 10017
 
 KANAAL_STATION = 255
 KANAAL_BINNEN = 1000
@@ -41,7 +45,61 @@ NAMEN = {
     CMD_GET_ALARM_MODE: "alarmstand", CMD_GET_DEVICE_PING: "apparaat_ping",
     CMD_GET_DELAY_ALARM: "vertraagd_alarm", CMD_NOTIFY_PAYLOAD: "melding",
     CMD_DOORBELL_NOTIFY_PAYLOAD: "deurbel_melding", CMD_PING: "ping",
+    CMD_DATABASE: "database", CMD_DATABASE_IMAGE: "afbeelding",
 }
+
+
+def _id_achtervoegsel(did: str) -> int:
+    """Getal uit het middenstuk van de p2p_did (zoals eufy-security-client)."""
+    import re
+
+    m = re.match(r"^[A-Z]+-(\d+)-[A-Z]+$", did or "")
+    if not m or len(m.group(1)) < 6:
+        return 0
+    c = m.group(1)
+    n1, n2, n3, n4 = int(c[0]), int(c[1]), int(c[3]), int(c[5])
+    uit = n1 + n2 + n3
+    if n3 < 5:
+        uit += n3
+    return uit + n4
+
+
+def _afbeelding_sleutel(sn: str, did: str, code: str) -> bytes:
+    import hashlib
+
+    nr = int(sn[-1], 16) if sn else 0
+    basis = sn[(nr + 10) % 10:] + str(_id_achtervoegsel(did))
+    zaad = hashlib.md5(f"{1000 - _id_achtervoegsel(did)}{int(code[2:])}".encode()).hexdigest().upper()
+    h = list(hashlib.sha256(f"01{basis}{zaad}".encode()).digest())
+    start = h[10]
+    for i in range(32):
+        b = h[i]
+        vast = h[i + 1] if i < 31 else start
+        if i == 31 or (i & 1):
+            h[10] = vast
+            if b > 126 or h[10] > 126:
+                h[i] = (h[10] - b) if (b < h[10] or b == h[10]) else (b - h[10])
+        elif b < 125 or vast < 125:
+            h[i] = vast + b
+    # zoals in JavaScript: tussenwaarden niet afkappen, pas bij het omzetten naar bytes
+    return bytes(x & 0xFF for x in h[16:]).hex().upper().encode()[:16]
+
+
+def ontsleutel_afbeelding(did: str, data: bytes) -> bytes:
+    """Afbeeldingen met kop "eufysecurity": de eerste 256 bytes na de kop zijn
+    met AES-ECB versleuteld (sleutel uit serienummer, p2p_did en code).
+    Gewone JPEG's (de lokale P2P-weg) komen ongewijzigd terug."""
+    if len(data) >= 41 and data[:12] == b"eufysecurity":
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        sn, code = data[13:29].decode(errors="replace"), data[30:40].decode(errors="replace")
+        rest = bytearray(data[41:])
+        d = Cipher(algorithms.AES(_afbeelding_sleutel(sn, did, code)), modes.ECB()).decryptor()
+        blok = bytes(rest[:256])
+        blok = blok[: len(blok) // 16 * 16]
+        rest[: len(blok)] = d.update(blok) + d.finalize()
+        return bytes(rest)
+    return data
 
 
 def tekst(inhoud: bytes) -> str:
@@ -114,6 +172,23 @@ def ontleed(opdracht: int, inhoud: bytes, resultaat: bool = False, kanaal: int =
         uit.update(soort="melding", inhoud=j if j is not None else tekst(inhoud)[:500])
         if isinstance(j, dict) and "cmd" in j:
             uit["sub_opdracht"] = j.get("cmd")
+    elif opdracht == CMD_DATABASE:
+        j = json_uit(inhoud)
+        if isinstance(j, dict):
+            uit.update(soort="database", sub_opdracht=j.get("cmd"), returncode=j.get("mIntRet"),
+                       data=j.get("data") if isinstance(j.get("data"), list) else [])
+        else:
+            uit.update(soort="onleesbaar", begin=inhoud[:48].hex())
+    elif opdracht == CMD_DATABASE_IMAGE:
+        j = json_uit(inhoud)
+        if isinstance(j, dict) and j.get("content"):
+            try:
+                ruw = base64.b64decode(j["content"])
+            except ValueError:
+                ruw = b""
+            uit.update(soort="afbeelding", bestand=j.get("file"), ruw=ruw)
+        else:
+            uit.update(soort="onleesbaar", begin=inhoud[:48].hex())
     elif opdracht in (CMD_PING, CMD_GET_DEVICE_PING):
         uit["soort"] = "ping"
     else:

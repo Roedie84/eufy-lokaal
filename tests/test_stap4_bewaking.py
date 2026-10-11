@@ -70,7 +70,7 @@ def test_zet_en_wacht_op_returncode():
         return code, s
 
     code, s = asyncio.run(_proef())
-    assert code == 0 and not s._open and s.meting.opdrachten_gestuurd == {"1350": 1}
+    assert code == 0 and not s._open and s.meting.opdrachten_gestuurd == {"bewakingsstand": 1}
 
 
 def test_zonder_verbinding_geen_opdracht():
