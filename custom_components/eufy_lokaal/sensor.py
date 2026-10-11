@@ -402,11 +402,12 @@ class ParameterSensor(_Basis):
     _unrecorded_attributes = frozenset({"waarde"})
 
     def __init__(self, c, sn: str, nummer: int) -> None:
-        from .parameternamen import parameternaam
+        from .parameternamen import parametereenheid, parameternaam
 
         super().__init__(c)
         self._sn, self._nummer = sn, nummer
         self._attr_name = parameternaam(nummer)
+        self._attr_native_unit_of_measurement = parametereenheid(nummer)
         self._attr_unique_id = f"{sn}_param_{nummer}"
         self._attr_device_info = _station_info(c, sn) if sn in c.stations else _apparaat_info(c, sn)
 

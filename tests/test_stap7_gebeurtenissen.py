@@ -50,7 +50,7 @@ def test_parameternamen():
 
 def test_alleen_bekende_parameters():
     from custom_components.eufy_lokaal.parameternamen import bekend
-    assert bekend(1013) and not bekend(987654) and not bekend(1101) and not bekend(1224)
+    assert bekend(1276) and not bekend(1013) and not bekend(1214) and not bekend(987654) and not bekend(1101)
 
 
 def _coord():

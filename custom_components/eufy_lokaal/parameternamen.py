@@ -604,9 +604,34 @@ ENGELS = {
 DUBBEL = frozenset({1101, 1142, 1151, 1224, 1176})
 
 
+# v0.7.16: alleen deze parameters worden een eigen entiteit (naam, eenheid). De HomeBase stuurt
+# per camera ook alle instellingen van andere apparaattypen mee (deurbel, schijnwerper,
+# binnencamera...); die staan alleen in de diagnose-sensor "Lokale parameters".
+NUTTIG: dict[int, tuple[str, str | None]] = {
+    1011: ("PIR-sensor", None),
+    1045: ("Status-LED", None),
+    1138: ("Batterijtemperatuur", "°C"),
+    1191: ("Dagen in gebruik", "d"),
+    1192: ("Detecties totaal", None),
+    1193: ("Opnames totaal", None),
+    1230: ("Luidsprekervolume", "%"),
+    1240: ("Microfoon uit", None),
+    1241: ("Luidspreker uit", None),
+    1249: ("Clipduur", "s"),
+    1276: ("Bewegingsgevoeligheid", None),
+    1277: ("Nachtzichtmodus", None),
+}
+
+
 def bekend(nummer: int) -> bool:
-    return nummer not in DUBBEL and (nummer in NEDERLANDS or nummer in ENGELS)
+    return nummer in NUTTIG and nummer not in DUBBEL
 
 
 def parameternaam(nummer: int) -> str:
+    if nummer in NUTTIG:
+        return NUTTIG[nummer][0]
     return NEDERLANDS.get(nummer) or ENGELS.get(nummer) or f"Parameter {nummer}"
+
+
+def parametereenheid(nummer: int) -> str | None:
+    return NUTTIG.get(nummer, (None, None))[1]

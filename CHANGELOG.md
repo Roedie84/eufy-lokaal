@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.16 — alleen zinvolle parameters
+
+- De HomeBase stuurt per camera ook alle instellingen van andere apparaattypen mee. Nog maar 12 parameters worden een eigen entiteit, met Nederlandse naam en eenheid: PIR-sensor, status-LED, batterijtemperatuur, dagen in gebruik, detecties en opnames totaal, luidsprekervolume, microfoon/luidspreker uit, clipduur, bewegingsgevoeligheid en nachtzichtmodus. De rest wordt bij het opstarten opgeruimd en blijft zichtbaar in *Lokale parameters*.
+
 ## v0.7.15 — gefilterde opnamevraag weer uit
 
 - De HomeBase 3 negeert het filter `detection_type`: elke soort gaf dezelfde 20 opnames, waardoor alle recente opnames ten onrechte als persoon, huisdier én voertuig werden gemeld. De gefilterde vragen zijn weer weg. Lokaal is alleen beweging (trigger 2) en aanbellen (8) te bepalen.
