@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.0 — geluid, aanbellen en detecties, alle parameters als entiteiten
+
+- **Geluid** in de livestream: AAC (ADTS) van de HomeBase gaat mee in de MPEG-TS.
+- **Gebeurtenissen**: de HomeBase 3 meldt lokaal beweging, persoon, aanbellen enz. (CMD_NOTIFY_PAYLOAD → 2037). Per camera binaire sensoren **Beweging**, **Persoon**, **Huisdier**, **Voertuig**, **Geluid**, **Pakket** en bij de deurbel **Aangebeld** (30 s aan), een **Gebeurtenis**-entiteit (event) en de bus-gebeurtenis `eufy_lokaal_gebeurtenis`. Direct daarna wordt het nieuwe beeld opgehaald.
+- **Alle parameters** die de HomeBase lokaal geeft, zijn nu een eigen (diagnose)entiteit, met een leesbare naam waar die bekend is.
+
 ## v0.6.2 — livestream werkt; zuiniger en veiliger
 
 - Getest: Schuur/zolder (S350) 4K 15 fps en de deurbel (E340) 1600×2200, frames ontsleuteld zonder fouten.

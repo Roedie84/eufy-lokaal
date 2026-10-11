@@ -145,3 +145,45 @@ def test_rust_na_maximale_duur():
         with pytest.raises(ConnectionError):
             await stream.kijker_erbij()
     asyncio.run(_proef())
+
+
+AAC = (Path(__file__).parent / "testgeluid.aac").read_bytes()
+
+
+def test_geluid_in_mpegts(tmp_path):
+    frames = v.adts_frames(AAC)
+    assert len(frames) == 48 and v.adts_formaat(frames[0]).frequentie == 16000
+    # audiobericht: 16 bytes kop + een paar ADTS-frames achter elkaar
+    bericht_ = struct.pack("<I", 0) + b"\x00\x00" + b"\x00" * 10 + b"".join(frames[:3])
+    assert v.lees_audioframe(bericht_) == frames[:3]
+
+    async def _proef():
+        stream = v.LiveStream("T8214", 0, lambda s: None, lambda: None)
+        ontvangen = bytearray()
+
+        async def schrijf(d):
+            ontvangen.extend(d)
+
+        taak = asyncio.ensure_future(v.stuur_ts(stream, schrijf))
+        for _ in range(50):
+            if stream.sleutel is not None:
+                break
+            await asyncio.sleep(0.02)
+        vframes = _frames()
+        stream.bij_audio(struct.pack("<I", 0) + b"\x00" * 12 + frames[0])
+        for i, fr in enumerate(vframes[:30]):
+            stream.bij_frame(_videobericht(fr, stream.sleutel, b"Q" * 16), 1)
+            stream.bij_audio(struct.pack("<I", 0) + b"\x00" * 12 + frames[1 + i])
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
+        stream.stop()
+        await taak
+        return ontvangen
+
+    data = asyncio.run(_proef())
+    pad = tmp_path / "av.ts"
+    pad.write_bytes(bytes(data))
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,sample_rate",
+                        "-of", "json", str(pad)], capture_output=True, text=True, check=True)
+    namen = sorted(s["codec_name"] for s in json.loads(r.stdout)["streams"])
+    assert namen == ["aac", "h264"]

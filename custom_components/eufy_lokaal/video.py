@@ -75,6 +75,51 @@ class Frame:
     fps: int
     tijd: int
     soort: int
+    audio: bool = False
+
+
+AAC_FREQ = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
+
+
+@dataclass
+class AudioFormaat:
+    frequentie: int
+    kanalen: int
+
+
+def adts_frames(data: bytes) -> list[bytes]:
+    """Losse ADTS-frames (AAC) uit een audiobericht."""
+    uit, i = [], 0
+    while i + 7 <= len(data):
+        if data[i] != 0xFF or (data[i + 1] & 0xF0) != 0xF0:
+            j = data.find(b"\xff", i + 1)
+            if j < 0:
+                break
+            i = j
+            continue
+        lengte = ((data[i + 3] & 0x03) << 11) | (data[i + 4] << 3) | (data[i + 5] >> 5)
+        if lengte < 7 or i + lengte > len(data):
+            break
+        uit.append(data[i:i + lengte])
+        i += lengte
+    return uit
+
+
+def adts_formaat(frame: bytes) -> AudioFormaat | None:
+    if len(frame) < 7:
+        return None
+    idx = (frame[2] >> 2) & 0x0F
+    kanalen = ((frame[2] & 0x01) << 2) | (frame[3] >> 6)
+    if idx >= len(AAC_FREQ):
+        return None
+    return AudioFormaat(AAC_FREQ[idx], kanalen or 1)
+
+
+def lees_audioframe(inhoud: bytes) -> list[bytes]:
+    """CMD_AUDIO_FRAME: 16 bytes kop (lengte, soort, volgnummer, tijd), dan AAC (ADTS)."""
+    if len(inhoud) < 16:
+        return []
+    return adts_frames(inhoud[16:])
 
 
 def lees_videoframe(inhoud: bytes, signcode: int, sleutel: RsaSleutel | None) -> Frame | None:
@@ -117,7 +162,8 @@ def _is_idr(data: bytes) -> bool:
 class TsMuxer:
     """H.264-frames naar MPEG-TS, per kijker (begint op een keyframe)."""
 
-    def __init__(self, schrijf: Callable[[bytes], None], breedte: int, hoogte: int, fps: int) -> None:
+    def __init__(self, schrijf: Callable[[bytes], None], breedte: int, hoogte: int, fps: int,
+                 audio: "AudioFormaat | None" = None) -> None:
         import av
 
         class _Uit:
@@ -130,21 +176,32 @@ class TsMuxer:
         self._s = self._c.add_stream("h264", rate=max(1, fps))
         self._s.width, self._s.height = breedte or 1920, hoogte or 1080
         self._s.time_base = Fraction(1, 1000)
+        self._a = None
+        if audio is not None:
+            self._a = self._c.add_stream("aac", rate=audio.frequentie)
+            try:
+                self._a.layout = "mono" if audio.kanalen == 1 else "stereo"
+            except (AttributeError, ValueError):
+                pass
+            self._a.time_base = Fraction(1, 1000)
         self._begin: float | None = None
-        self._laatste = -1
+        self._laatste = {"v": -1, "a": -1}
 
     def voeg_toe(self, f: Frame) -> None:
         import av
 
+        if f.audio and self._a is None:
+            return
         nu = time.monotonic()
         if self._begin is None:
             self._begin = nu
+        sleutel = "a" if f.audio else "v"
         pts = int((nu - self._begin) * 1000)
-        if pts <= self._laatste:
-            pts = self._laatste + 1
-        self._laatste = pts
+        if pts <= self._laatste[sleutel]:
+            pts = self._laatste[sleutel] + 1
+        self._laatste[sleutel] = pts
         p = av.Packet(f.data)
-        p.stream = self._s
+        p.stream = self._a if f.audio else self._s
         p.time_base = Fraction(1, 1000)
         p.pts = p.dts = pts
         p.is_keyframe = f.keyframe
@@ -178,13 +235,16 @@ class LiveStream:
         self.fouten = 0
         self.laatste_fout: str | None = None
         self.formaat: tuple[int, int, int] | None = None
+        self.audio: AudioFormaat | None = None
+        self.audioframes = 0
         self._stop_taak: asyncio.TimerHandle | None = None
         self.sessies = 0
         self.rust_tot = 0.0
 
     def samenvatting(self) -> dict[str, Any]:
         return {"actief": self.actief, "kijkers": len(self.kijkers), "frames": self.frames,
-                "keyframes": self.keyframes, "fouten": self.fouten, "laatste_fout": self.laatste_fout,
+                "keyframes": self.keyframes, "audioframes": self.audioframes,
+                "audio": f"AAC {self.audio.frequentie} Hz" if self.audio else None, "fouten": self.fouten, "laatste_fout": self.laatste_fout,
                 "formaat": self.formaat, "gestart": self.gestart, "laatste_frame": self.laatste_frame,
                 "sessies": self.sessies, "rust_tot": self.rust_tot or None}
 
@@ -231,6 +291,17 @@ class LiveStream:
             self.laatste_fout = f"stop: {err}"
         for k in list(self.kijkers):
             _zet(k.wachtrij, None)
+
+    def bij_audio(self, inhoud: bytes) -> None:
+        if not self.actief:
+            return
+        for fr in lees_audioframe(inhoud):
+            if self.audio is None:
+                self.audio = adts_formaat(fr)
+            self.audioframes += 1
+            f = Frame(fr, False, 0, 0, 0, 0, 0, audio=True)
+            for k in list(self.kijkers):
+                _zet(k.wachtrij, f)
 
     def bij_frame(self, inhoud: bytes, signcode: int) -> None:
         if not self.actief:
@@ -286,11 +357,11 @@ async def stuur_ts(stream: LiveStream, schrijf_async: Callable[[bytes], Any]) ->
             if f is None:
                 return
             if muxer is None:
-                if not f.keyframe:
+                if f.audio or not f.keyframe:
                     if time.monotonic() - begin > GEEN_BEELD_TIMEOUT_S:
                         return
                     continue
-                muxer = TsMuxer(buffer.append, f.breedte, f.hoogte, f.fps)
+                muxer = TsMuxer(buffer.append, f.breedte, f.hoogte, f.fps, stream.audio)
             muxer.voeg_toe(f)
             if buffer:
                 data = b"".join(buffer)

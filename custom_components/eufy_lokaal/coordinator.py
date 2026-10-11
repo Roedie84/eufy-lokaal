@@ -108,6 +108,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         from .video import nieuw_token
 
         self.live: dict[str, "LiveStream"] = {}
+        # gebeurtenissen per apparaat: soort -> laatste tijd
+        self.detecties: dict[str, dict[str, float]] = {}
+        self.laatste_gebeurtenis: dict[str, dict] = {}
+        self._bij_gebeurtenis: list = []
         self.live_token = nieuw_token()
 
     # cloud ----------------------------------------------------------------------
@@ -282,6 +286,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if soort in ("ping", "antwoord", "camera_info"):
                 self.async_update_listeners()
                 return
+            if soort == "melding":
+                from .gebeurtenissen import gebeurtenis_uit
+
+                g = gebeurtenis_uit(b)
+                if g is not None:
+                    self._gebeurtenis(station_sn, g, nu)
             apparaat = self.apparaat_bij_kanaal(station_sn, int(b.get("kanaal", KANAAL_STATION)))
             gebeurtenis = {**b, "station_sn": station_sn, "apparaat_sn": apparaat, "tijd": nu}
             self.laatste_melding[station_sn] = gebeurtenis
@@ -422,15 +432,18 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             s.stop_live(int(a.get("device_channel") or 0))
 
     def _bij_video_voor(self, station_sn: str):
-        from .p2p_sessie import CMD_VIDEO_FRAME
+        from .p2p_sessie import CMD_AUDIO_FRAME, CMD_VIDEO_FRAME
 
         def bij_video(kop, inhoud: bytes) -> None:
-            if kop.opdracht != CMD_VIDEO_FRAME:
-                return  # audio (1301) laten we voorlopig weg
+            if kop.opdracht not in (CMD_VIDEO_FRAME, CMD_AUDIO_FRAME):
+                return
             for stream in self.live.values():
                 if stream.actief and stream.kanaal == kop.kanaal and \
                         (self.apparaten.get(stream.sn) or {}).get("station_sn") == station_sn:
-                    stream.bij_frame(inhoud, kop.versleuteld)
+                    if kop.opdracht == CMD_VIDEO_FRAME:
+                        stream.bij_frame(inhoud, kop.versleuteld)
+                    else:
+                        stream.bij_audio(inhoud)
                     return
         return bij_video
 
@@ -474,6 +487,30 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             return int(w) if w is not None else None
         except ValueError:
             return None
+
+    def _gebeurtenis(self, station_sn: str, g: dict, nu: float) -> None:
+        """Beweging, aanbellen e.d.: detectie aan, gebeurtenis op de bus."""
+        from .gebeurtenissen import DETECTIES, DUUR_S
+
+        sn = g.get("apparaat_sn") or station_sn
+        g = {**g, "station_sn": station_sn, "apparaat_sn": sn, "tijd": nu}
+        self.laatste_gebeurtenis[sn] = g
+        d = self.detecties.setdefault(sn, {})
+        for naam, soorten in DETECTIES.items():
+            if g["soort"] in soorten:
+                d[naam] = nu
+        self.hass.bus.async_fire(f"{DOMAIN}_gebeurtenis", {k: v for k, v in g.items() if k != "ruw"})
+        for terug in list(self._bij_gebeurtenis):
+            terug(sn, g)
+        # na afloop de detecties weer uit
+        self.hass.loop.call_later(DUUR_S + 1, self.async_update_listeners)
+        self.hass.loop.call_later(4, self._vraag_laatste_info, station_sn)
+
+    def detectie_aan(self, sn: str, naam: str) -> bool:
+        from .gebeurtenissen import DUUR_S
+
+        t = (self.detecties.get(sn) or {}).get(naam)
+        return t is not None and time.time() - t < DUUR_S
 
     def bewakingsstand(self, station_sn: str) -> str | None:
         w = self.lokale_parameters(station_sn).get(PARAM_BEWAKINGSSTAND)

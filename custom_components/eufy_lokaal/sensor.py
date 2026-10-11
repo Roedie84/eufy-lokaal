@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -40,6 +40,24 @@ async def async_setup_entry(
         if parameter(a, PARAM_WIFI_RSSI) is not None:
             entiteiten.append(ApparaatWifiSensor(c, sn))
     async_add_entities(entiteiten)
+
+    # Elke lokale parameter als eigen entiteit; ze komen pas na de eerste
+    # CMD_CAMERA_INFO binnen, dus bij elke update kijken wat er nieuw is.
+    bekend: set[tuple[str, int]] = set()
+
+    @callback
+    def _nieuwe_parameters() -> None:
+        nieuw = []
+        for sn in list(c.stations) + [s for s in c.apparaten if s not in c.stations]:
+            for nummer in c.lokale_parameters(sn):
+                if (sn, nummer) not in bekend:
+                    bekend.add((sn, nummer))
+                    nieuw.append(ParameterSensor(c, sn, nummer))
+        if nieuw:
+            async_add_entities(nieuw)
+
+    _nieuwe_parameters()
+    entry.async_on_unload(c.async_add_listener(_nieuwe_parameters))
 
 
 def _station_info(c: EufyLokaalCoordinator, sn: str) -> DeviceInfo:
@@ -354,3 +372,50 @@ def _lokaal_of_cloud(e: _Apparaat, param: int) -> int | None:
 
 def _bron(e: _Apparaat, param: int) -> str:
     return "lokaal" if _lokaal_getal(e, param) is not None else "cloud"
+
+
+class ParameterSensor(_Basis):
+    """Eén parameter van station of camera, zoals de HomeBase hem lokaal geeft."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _unrecorded_attributes = frozenset({"waarde"})
+
+    def __init__(self, c, sn: str, nummer: int) -> None:
+        from .parameternamen import parameternaam
+
+        super().__init__(c)
+        self._sn, self._nummer = sn, nummer
+        self._attr_name = parameternaam(nummer)
+        self._attr_unique_id = f"{sn}_param_{nummer}"
+        self._attr_device_info = _station_info(c, sn) if sn in c.stations else _apparaat_info(c, sn)
+
+    @property
+    def _waarde(self) -> str | None:
+        return self.coordinator.lokale_parameters(self._sn).get(self._nummer)
+
+    @property
+    def available(self) -> bool:
+        return self._waarde is not None
+
+    @property
+    def native_value(self):
+        w = self._waarde
+        if w is None:
+            return None
+        try:
+            return int(w)
+        except ValueError:
+            pass
+        try:
+            return float(w)
+        except ValueError:
+            pass
+        return w if len(w) <= 250 else f"{w[:240]}… ({len(w)} tekens)"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        w = self._waarde or ""
+        a = {"parameter": self._nummer}
+        if len(w) > 250 or w.startswith(("{", "[")):
+            a["waarde"] = w
+        return a
