@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.1.2 — eigen icoon
+
+Een eigen icoon in `brand/` (schild met cameralens), zodat de integratie in
+Home Assistant herkenbaar is. Bewust geen Eufy-logo: dat is een merk van
+Anker en dit project is daar niet aan verbonden.
+
 ## v0.1.1 — de HomeBase lokaal zoeken op het goede adres
 
 Eerste meting 11-10 13:00: ingelogd, 1 station (HomeBase T8030) en 3
