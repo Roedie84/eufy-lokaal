@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.15 — gefilterde opnamevraag weer uit
+
+- De HomeBase 3 negeert het filter `detection_type`: elke soort gaf dezelfde 20 opnames, waardoor alle recente opnames ten onrechte als persoon, huisdier én voertuig werden gemeld. De gefilterde vragen zijn weer weg. Lokaal is alleen beweging (trigger 2) en aanbellen (8) te bepalen.
+
 ## v0.7.14 — detectiesoorten via gefilterde opnamevraag
 
 - De HomeBase 3 kent de lokale vraag met uitsneden (10017) niet (ERROR_NO_SUPPORT). Nu vraagt de integratie per soort (persoon, voertuig, huisdier) de opnames van vandaag op met het filter `detection_type`; opnames die terugkomen krijgen die soort. Negeert de HomeBase het filter (dezelfde lijst als zonder filter), dan gebeurt er niets; de uitkomst staat in de diagnostiek onder `detectiefilter`.

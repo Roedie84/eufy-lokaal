@@ -338,17 +338,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
                               (nu + timedelta(days=1)).strftime("%Y%m%d"),
                               int(time.time() * 1000), aantal=50), "opnames")
-        # v0.7.14: 10017 (met uitsneden) kent de HomeBase 3 niet (ERROR_NO_SUPPORT). Wel kan 10006
-        # filteren op detection_type: per soort vragen welke opnames van vandaag die soort hebben.
-        filtervragen = self.__dict__.setdefault("_filtervragen", {})
-        for i, bits in enumerate(FILTER_DETECTIES):
-            transactie = f"{int(time.time() * 1000)}{i}"
-            filtervragen[transactie] = bits
-            s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
-                                  (nu + timedelta(days=1)).strftime("%Y%m%d"), 0, aantal=20,
-                                  detectie=bits, transactie=transactie), f"opnames_{bits}")
-        while len(filtervragen) > 30:
-            filtervragen.pop(next(iter(filtervragen)))
+        # v0.7.15: de HomeBase 3 kent geen lokale vraag met uitsneden (10017: ERROR_NO_SUPPORT) en
+        # negeert het filter detection_type van 10006 (elke soort gaf dezelfde lijst). Persoon, dier
+        # en voertuig zijn lokaal dus niet te bepalen; hier wordt daarom niets extra gevraagd.
 
     def _bij_database(self, station_sn: str, b: dict) -> None:
         from .p2p_sessie import afbeelding_tekst
