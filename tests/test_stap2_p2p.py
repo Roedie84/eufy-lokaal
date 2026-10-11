@@ -56,8 +56,15 @@ def test_niveau1_sleutel():
 
 
 def test_gatewayinfo_uitlezen():
-    inhoud = struct.pack("<I", 0) + struct.pack("<H", 7) + b"\x00\x00" + b"SLEUTEL" + b"\x00rest"
-    assert ps.gatewayinfo_uit(inhoud) == (7, b"SLEUTEL")
+    rsa = bytes.fromhex(NODE["enc"])
+    # HomeBase 3: cipher-id vooraan, geen returncode, opvulling achteraan.
+    inhoud = struct.pack("<H", 40641) + b"\x00\x00" + rsa + bytes(12)
+    k = ps.gatewayinfo_kandidaten(inhoud)
+    assert k[0] == (40641, rsa + bytes(12))
+    assert ps.rsa_sessiesleutel(NODE["pem"], k[0][1]) == b"0123456789abcdef"
+    # oudere vorm: met 4-byte returncode
+    oud = struct.pack("<I", 0) + struct.pack("<H", 7) + b"\x00\x00" + rsa
+    assert (7, rsa) in ps.gatewayinfo_kandidaten(oud)
 
 
 def test_sessie_tegen_een_nep_station():

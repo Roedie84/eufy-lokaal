@@ -159,14 +159,34 @@ def rsa_ontsleutel(privesleutel: str, data: bytes) -> bytes:
 
 
 def gatewayinfo_uit(inhoud: bytes) -> tuple[int, bytes] | None:
-    """(cipher-id, versleutelde sleutel) uit het antwoord op CMD_GATEWAYINFO.
-    `inhoud` begint met de 4-byte returncode."""
+    """(cipher-id, versleutelde sleutel) uit het antwoord op CMD_GATEWAYINFO,
+    zonder returncode vooraan: 2 bytes cipher-id (LE), 2 bytes leeg, dan de
+    RSA-versleutelde sessiesleutel. Op de HomeBase 3 (firmware 3.8) is het
+    antwoord 144 bytes: 4 + 128 (RSA-1024) + opvulling."""
     if len(inhoud) < 8:
         return None
-    data = inhoud[4:]
-    cipher_id = struct.unpack("<H", data[:2])[0]
-    sleutel = data[4:].split(b"\x00", 1)[0] if b"\x00" in data[4:] else data[4:]
-    return cipher_id, sleutel
+    return struct.unpack("<H", inhoud[:2])[0], inhoud[4:]
+
+
+def gatewayinfo_kandidaten(inhoud: bytes) -> list[tuple[int, bytes]]:
+    """Zonder en met 4-byte returncode vooraan; de cloud beslist welke klopt."""
+    uit = []
+    for begin in (0, 4):
+        info = gatewayinfo_uit(inhoud[begin:])
+        if info is not None and info[0] and info not in uit:
+            uit.append(info)
+    return uit
+
+
+def rsa_sessiesleutel(privesleutel: str, versleuteld: bytes) -> bytes:
+    """Ontsleutel precies één RSA-blok (de sleutelgrootte bepaalt de lengte)."""
+    tekst = privesleutel.replace("\n", "").replace("\r", "")
+    for kop in ("-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----",
+                "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"):
+        tekst = tekst.replace(kop, "")
+    sleutel = serialization.load_der_private_key(base64.b64decode(tekst), password=None)
+    blok = sleutel.key_size // 8
+    return sleutel.decrypt(versleuteld[:blok], rsa_padding.PKCS1v15())
 
 
 # --- de sessie -------------------------------------------------------------------
@@ -197,6 +217,7 @@ class Meting:
     # exemplaar, om het formaat van deze firmware te zien.
     laatste_data: list = field(default_factory=list)
     voorbeelden: dict = field(default_factory=dict)
+    sleutel_pogingen: list = field(default_factory=list)
 
     def data_pakket(self, data: bytes, oordeel: str) -> None:
         self.laatste_data.append({"t": round(time.time(), 1), "lengte": len(data),
@@ -263,6 +284,7 @@ class P2PSessie:
         self._ping_t: float | None = None
         self._verbonden = asyncio.Event()
         self._taken: list[asyncio.Task] = []
+        self._sleutel_bezig = False
 
     def _stuur(self, data: bytes, adres) -> None:
         if self._transport is None:
@@ -367,7 +389,7 @@ class P2PSessie:
                 self.meting.data_pakket(data, "dubbel")
                 return  # dubbel (al gehad)
         self._verwacht[soort] = (volgnr + 1) % 0x10000
-        if soort != SOORT_DATA:
+        if soort not in (SOORT_DATA, SOORT_CONTROL):
             self.meting.data_pakket(data, f"soort {soort} overgeslagen")
             return  # video/bestanden: pas in latere stappen
         bouwer = self._bouwer.setdefault(soort, Bouwer())
@@ -379,30 +401,47 @@ class P2PSessie:
 
     def _bericht(self, kop: DataKop, inhoud: bytes) -> None:
         resultaat = kop.soort == 1
+        if kop.opdracht == CMD_GATEWAYINFO:
+            # Het antwoord zelf is met RSA versleuteld, niet met AES.
+            self.meting.noteer(kop, len(inhoud), True)
+            if self.sleutel is None and not self._sleutel_bezig:
+                self._sleutel_bezig = True
+                asyncio.get_running_loop().create_task(self._zet_sleutel(gatewayinfo_kandidaten(inhoud)))
+            return
         if kop.versleuteld and self.sleutel and inhoud and len(inhoud) % 16 == 0:
             try:
                 inhoud = aes_ecb_ontsleutel(self.sleutel, inhoud)
             except Exception:  # noqa: BLE001
                 pass
         self.meting.noteer(kop, len(inhoud), resultaat)
-        if kop.opdracht == CMD_GATEWAYINFO and resultaat:
-            info = gatewayinfo_uit(inhoud)
-            asyncio.get_running_loop().create_task(self._zet_sleutel(info))
 
-    async def _zet_sleutel(self, info: tuple[int, bytes] | None) -> None:
-        if info is not None and self._haal_cipher is not None:
-            cipher_id, versleuteld = info
-            try:
-                prive = await self._haal_cipher(cipher_id)
-                if prive:
-                    sleutel = rsa_ontsleutel(prive, versleuteld)
-                    if len(sleutel) == 16:
-                        self.sleutel, self.meting.niveau, self.meting.sleutel_bron = sleutel, 2, "rsa"
-                        return
-            except Exception as err:  # noqa: BLE001
-                self.meting.laatste_fout = f"sessiesleutel: {type(err).__name__}: {err}"
-        self.sleutel = niveau1_sleutel(self.station_sn, self.did)
-        self.meting.niveau, self.meting.sleutel_bron = 1, "serienummer"
+    async def _zet_sleutel(self, kandidaten: list[tuple[int, bytes]]) -> None:
+        try:
+            for cipher_id, versleuteld in kandidaten:
+                if self._haal_cipher is None:
+                    break
+                try:
+                    prive = await self._haal_cipher(cipher_id)
+                except Exception as err:  # noqa: BLE001
+                    self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: {type(err).__name__}: {err}")
+                    continue
+                if not prive:
+                    self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: onbekend bij de cloud")
+                    continue
+                try:
+                    sleutel = rsa_sessiesleutel(prive, versleuteld)
+                except Exception as err:  # noqa: BLE001
+                    self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: RSA {type(err).__name__}")
+                    continue
+                self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: sleutel {len(sleutel)} bytes")
+                if len(sleutel) == 16:
+                    self.sleutel, self.meting.niveau, self.meting.sleutel_bron = sleutel, 2, f"rsa (cipher {cipher_id})"
+                    return
+            self.sleutel = niveau1_sleutel(self.station_sn, self.did)
+            self.meting.niveau, self.meting.sleutel_bron = 1, "serienummer"
+        finally:
+            del self.meting.sleutel_pogingen[:-8]
+            self._sleutel_bezig = False
 
     # weergave ----------------------------------------------------------------------
 
@@ -427,4 +466,6 @@ class P2PSessie:
             "laatste_pakketten": m.laatste_pakketten[-6:],
             "laatste_data": m.laatste_data[-8:],
             "voorbeelden": m.voorbeelden,
+            "sleutel_bron": m.sleutel_bron,
+            "sleutel_pogingen": m.sleutel_pogingen,
         }

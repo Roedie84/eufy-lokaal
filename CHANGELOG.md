@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.2.3 — sessiesleutel van de HomeBase 3
+
+- De HomeBase 3 (firmware 3.8) antwoordt op CMD_GATEWAYINFO via het CONTROL-kanaal (soort 2); dat kanaal wordt nu ook gelezen.
+- Het antwoord (144 bytes) heeft geen returncode: cipher-id, twee lege bytes en één RSA-blok. Beide vormen worden geprobeerd, de cloud beslist.
+- `sleutel_pogingen` laat per poging zien wat er gebeurde.
+
 ## v0.2.2 — sessie blijft staan, DATA-inhoud zichtbaar
 
 - Niet meer elke minuut opnieuw verbinden: de poort in het zoekantwoord wisselt per ronde, alleen het IP telt nog.
