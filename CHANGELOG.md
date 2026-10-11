@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.2.4 — sessiesleutel: eerst niveau 1 ontsleutelen
+
+- Het GATEWAYINFO-antwoord op het CONTROL-kanaal is zelf met de sleutel van niveau 1 versleuteld; daarbinnen staan het cipher-id (op de HomeBase: 189) en het RSA-blok. Getoetst op een echt pakket van de HomeBase 3.
+
 ## v0.2.3 — sessiesleutel van de HomeBase 3
 
 - De HomeBase 3 (firmware 3.8) antwoordt op CMD_GATEWAYINFO via het CONTROL-kanaal (soort 2); dat kanaal wordt nu ook gelezen.

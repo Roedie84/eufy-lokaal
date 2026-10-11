@@ -160,8 +160,8 @@ def rsa_ontsleutel(privesleutel: str, data: bytes) -> bytes:
 
 def gatewayinfo_uit(inhoud: bytes) -> tuple[int, bytes] | None:
     """(cipher-id, versleutelde sleutel) uit het antwoord op CMD_GATEWAYINFO,
-    zonder returncode vooraan: 2 bytes cipher-id (LE), 2 bytes leeg, dan de
-    RSA-versleutelde sessiesleutel. Op de HomeBase 3 (firmware 3.8) is het
+    na ontsleutelen met niveau 1: 2 bytes cipher-id (LE), 2 bytes leeg, dan
+    de RSA-versleutelde sessiesleutel. Op de HomeBase 3 (firmware 3.8) is het
     antwoord 144 bytes: 4 + 128 (RSA-1024) + opvulling."""
     if len(inhoud) < 8:
         return None
@@ -171,7 +171,7 @@ def gatewayinfo_uit(inhoud: bytes) -> tuple[int, bytes] | None:
 def gatewayinfo_kandidaten(inhoud: bytes) -> list[tuple[int, bytes]]:
     """Zonder en met 4-byte returncode vooraan; de cloud beslist welke klopt."""
     uit = []
-    for begin in (0, 4):
+    for begin in (0,):
         info = gatewayinfo_uit(inhoud[begin:])
         if info is not None and info[0] and info not in uit:
             uit.append(info)
@@ -402,7 +402,11 @@ class P2PSessie:
     def _bericht(self, kop: DataKop, inhoud: bytes) -> None:
         resultaat = kop.soort == 1
         if kop.opdracht == CMD_GATEWAYINFO:
-            # Het antwoord zelf is met RSA versleuteld, niet met AES.
+            # Met signCode > 0 is het antwoord versleuteld met de sleutel van
+            # niveau 1 (serienummer + p2p_did); daarbinnen cipher-id en het
+            # RSA-blok met de sessiesleutel (zoals eufy-security-client).
+            if kop.versleuteld and inhoud and len(inhoud) % 16 == 0:
+                inhoud = aes_ecb_ontsleutel(niveau1_sleutel(self.station_sn, self.did), inhoud)
             self.meting.noteer(kop, len(inhoud), True)
             if self.sleutel is None and not self._sleutel_bezig:
                 self._sleutel_bezig = True

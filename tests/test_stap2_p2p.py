@@ -62,9 +62,17 @@ def test_gatewayinfo_uitlezen():
     k = ps.gatewayinfo_kandidaten(inhoud)
     assert k[0] == (40641, rsa + bytes(12))
     assert ps.rsa_sessiesleutel(NODE["pem"], k[0][1]) == b"0123456789abcdef"
-    # oudere vorm: met 4-byte returncode
-    oud = struct.pack("<I", 0) + struct.pack("<H", 7) + b"\x00\x00" + rsa
-    assert (7, rsa) in ps.gatewayinfo_kandidaten(oud)
+
+
+def test_gatewayinfo_homebase3_echt_pakket():
+    """Echt antwoord van de HomeBase 3 (T8030, 3.8.5.2): ontsleuteld met
+    niveau 1 begint het met cipher-id 189 en twee lege bytes."""
+    versleuteld = bytes.fromhex(
+        "c19e9300daeae02d201a71aed44acdd9bfb63eb24bd8aac5c9f3a41a8d902683"
+        "50db2f88349e0d9eb1e33a9247decf01")
+    k = ps.niveau1_sleutel("T8030T2325281762", "EUPRDMB-241997-DGTKC")
+    platte = ps.aes_ecb_ontsleutel(k, versleuteld)
+    assert ps.gatewayinfo_uit(platte)[0] == 189 and platte[2:4] == b"\x00\x00"
 
 
 def test_sessie_tegen_een_nep_station():
@@ -84,11 +92,16 @@ def test_sessie_tegen_een_nep_station():
                     self.t.sendto(ps.ack(0, volgnr), adres)
                     kop = ps.lees_kop(data[8:])
                     self.opdrachten.append(kop.opdracht)
+                    # zoals de HomeBase 3: CONTROL-kanaal, signCode 1, inhoud met
+                    # niveau 1 versleuteld, geen returncode, opgevuld tot 144.
+                    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
                     sleutel = bytes.fromhex(NODE["enc"])
-                    inhoud = struct.pack("<I", 0) + struct.pack("<H", 3) + b"\x00\x00" + sleutel
+                    plat = (struct.pack("<H", 3) + b"\x00\x00" + sleutel).ljust(144, b"\x00")
+                    e = Cipher(algorithms.AES(ps.niveau1_sleutel("T8030T2325281762", DID)), modes.ECB()).encryptor()
+                    inhoud = e.update(plat) + e.finalize()
                     antwoord = (ps.MAGIC + struct.pack("<H", kop.opdracht) + struct.pack("<I", len(inhoud))
-                                + b"\x00\x00" + bytes([255, 0, 1, 0]) + inhoud)
-                    self.t.sendto(bericht(ps.DATA, b"\xd1\x00" + struct.pack(">H", 0) + antwoord), adres)
+                                + b"\x00\x00" + bytes([255, 1, 0, 0]) + inhoud)
+                    self.t.sendto(bericht(ps.DATA, b"\xd1\x02" + struct.pack(">H", 0) + antwoord), adres)
 
         lus = asyncio.get_running_loop()
         t, station = await lus.create_datagram_endpoint(_Station, local_addr=("127.0.0.1", 0))
