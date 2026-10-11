@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.3 — gebeurtenisbeeld sneller binnen
+
+- Na een gebeurtenis (beweging, aanbellen) wordt het nieuwe beeld na 4 én na 15 s opgevraagd, zodat **Laatste beeld** vrijwel direct bijgewerkt is (nodig om beelden bij beweging op te slaan).
+
 ## v0.7.2 — momentopname robuuster, H.265
 
 - Momentopname: SPS/PPS uit eerdere frames worden voor het keyframe gezet en er worden een paar frames gedecodeerd tot er beeld is; lukt het niet, dan het volgende keyframe.

@@ -509,7 +509,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             terug(sn, g)
         # na afloop de detecties weer uit
         self.hass.loop.call_later(DUUR_S + 1, self.async_update_listeners)
+        # Het gebeurtenisbeeld staat er niet altijd meteen: na 4 en na 15 s kijken.
         self.hass.loop.call_later(4, self._vraag_laatste_info, station_sn)
+        self.hass.loop.call_later(15, self._vraag_laatste_info, station_sn)
 
     async def async_momentopname(self, sn: str, reden: str = "gevraagd") -> bool:
         """Live beeld van een camera ophalen; klaar = gebeurtenis eufy_lokaal_momentopname."""
