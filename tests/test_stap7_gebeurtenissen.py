@@ -72,27 +72,13 @@ def _info(teller, pad="/zx/a.jpg"):
             "data": [{"device_sn": "T8416", "payload": {"event_count": teller, "crop_hb3_path": pad}}]}
 
 
-def test_beweging_uit_hogere_gebeurtenisteller():
+def test_hogere_teller_vraagt_opnames():
     c = _coord()
     bij = c._bij_bericht_voor("T8030")
-    bij(_info(10))  # eerste meting: geen beweging
-    assert not c.detectie_aan("T8416", "beweging")
     bij(_info(10))
-    assert not c.detectie_aan("T8416", "beweging")
+    c.hass.loop.call_later.reset_mock()
     bij(_info(11, "/zx/b.jpg"))
-    assert c.detectie_aan("T8416", "beweging")
-    assert c.laatste_gebeurtenis["T8416"]["bron"] == "nieuwe opname"
-
-
-def test_geen_dubbele_beweging_na_aanbellen():
-    import time
-
-    c = _coord()
-    bij = c._bij_bericht_voor("T8030")
-    bij(_info(5))
-    c.laatste_gebeurtenis["T8416"] = {"soort": "aangebeld", "tijd": time.time()}
-    bij(_info(6))
-    assert not c.detectie_aan("T8416", "beweging")
+    assert any(a[0][1] == c._vraag_opnames for a in c.hass.loop.call_later.call_args_list)
 
 
 def test_camera_actief_vraagt_laatste_info():
@@ -110,11 +96,11 @@ def test_soorten_uit_opname():
     from custom_components.eufy_lokaal.gebeurtenissen import soorten_uit_opname
 
     assert soorten_uit_opname(2) == ["beweging"]
-    assert soorten_uit_opname(4) == ["onbekend_persoon"]
+    assert soorten_uit_opname(4) == []  # live kijken
     assert soorten_uit_opname(8) == ["aangebeld"]
     assert soorten_uit_opname(2, 8) == ["huisdier"]
     assert soorten_uit_opname(2, 4 | 2) == ["onbekend_persoon", "voertuig"]
-    assert soorten_uit_opname(4, 0, bekend_persoon=True) == ["bekend_persoon"]
+    assert soorten_uit_opname(2, 2, bekend_persoon=True) == ["bekend_persoon"]
     assert soorten_uit_opname(2, 1024) == ["pakket_bezorgd"]
 
 
@@ -132,21 +118,21 @@ def test_opname_geeft_persoon_en_dier_eenmalig():
     c = _coord()
     bij = c._bij_bericht_voor("T8030")
     lijst = {"soort": "database", "naam": "database", "kanaal": 255, "sub_opdracht": 10006,
-             "data": [_opname(1, 4), _opname(2, 2, minuten_geleden=30)]}
+             "data": [_opname(1, 2), _opname(2, 2, minuten_geleden=30), _opname(3, 4)]}
     bij(lijst)
-    assert c.detectie_aan("T8416", "persoon")
+    assert c.detectie_aan("T8416", "beweging")
     assert not c.detectie_aan("T8416", "huisdier")
     soorten = [a[0][1]["soort"] for a in c.hass.bus.async_fire.call_args_list if a[0][0] == "eufy_lokaal_gebeurtenis"]
-    assert soorten == ["onbekend_persoon"]  # opname van 30 min geleden telt niet
+    assert soorten == ["beweging"]  # 30 min oud telt niet; trigger 4 (live) ook niet
     bij(lijst)  # nog eens: niet opnieuw melden
     uitsneden = {"soort": "database", "naam": "database", "kanaal": 255, "sub_opdracht": 10017,
-                 "data": [{"table_name": "history_record_info", "payload": [_opname(1, 4)]},
+                 "data": [{"table_name": "history_record_info", "payload": [_opname(1, 2)]},
                           {"table_name": "record_crop_picture_info",
-                           "payload": [{"record_id": 1, "detection_type": 8, "person_id": 0}]}]}
+                           "payload": [{"record_id": 1, "detection_type": 8 | 2, "person_id": 0}]}]}
     bij(uitsneden)
     soorten = [a[0][1]["soort"] for a in c.hass.bus.async_fire.call_args_list if a[0][0] == "eufy_lokaal_gebeurtenis"]
-    assert soorten == ["onbekend_persoon", "huisdier"]
-    assert c.detectie_aan("T8416", "huisdier")
+    assert soorten == ["beweging", "onbekend_persoon", "huisdier"]
+    assert c.detectie_aan("T8416", "huisdier") and c.detectie_aan("T8416", "persoon")
 
 
 def test_uitsneden_tekst_veilig():

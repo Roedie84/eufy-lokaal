@@ -57,7 +57,9 @@ def gebeurtenis_uit(melding: dict) -> dict[str, Any] | None:
 
 
 # v0.7.12: soorten uit de database van de HomeBase (eufy-security-client: TriggerType, FilterDetectType)
-TRIGGER_PERSOON, TRIGGER_BEL = 4, 8
+# 4 heet in eufy-security-client PERSON, maar blijkt bij de HomeBase 3 een opname door live kijken
+# (11-10: elke live-weergave in app of HA gaf trigger 4, zonder persoon in beeld).
+TRIGGER_LIVE, TRIGGER_BEL = 4, 8
 DETECTIE_BITS = [
     (1, "onbekend_persoon"), (2, "onbekend_persoon"), (4, "voertuig"), (8, "huisdier"), (128, "geluid"),
     (256, "huilen"), (512, "pakket_opgehaald"), (1024, "pakket_bezorgd"), (2048, "pakket_bezorgd"),
@@ -71,10 +73,10 @@ def soorten_uit_opname(trigger_type, detectie_bits: int = 0, bekend_persoon: boo
         t = int(trigger_type or 0)
     except (TypeError, ValueError):
         t = 0
+    if t & TRIGGER_LIVE and not t & ~TRIGGER_LIVE and not detectie_bits:
+        return []  # opname door live kijken (app of HA), geen gebeurtenis
     if t & TRIGGER_BEL:
         uit.append("aangebeld")
-    if t & TRIGGER_PERSOON:
-        uit.append("onbekend_persoon")
     for bit, soort in DETECTIE_BITS:
         if detectie_bits & bit and soort not in uit:
             uit.append(soort)

@@ -283,9 +283,12 @@ class OpnamesSensor(_Basis):
     @property
     def extra_state_attributes(self) -> dict:
         o = self.coordinator.opnames.get(self._sn) or []
+        uitsneden = self.coordinator.__dict__.get("uitsneden") or {}
+        o = [{**r, "uitsneden": uitsneden[r.get("record_id")]} if r.get("record_id") in uitsneden else r
+             for r in o[:10]]
         return {"laatste_start": o[0].get("start_time") if o else None,
                 "laatste_einde": o[0].get("end_time") if o else None,
-                "opnames": o[:10],
+                "opnames": o,
                 "laatste_info_ruw": (self.coordinator.laatste_info.get(self._sn) or {}).get("ruw")}
 
 

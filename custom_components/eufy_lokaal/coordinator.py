@@ -275,7 +275,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if soort == "database":
                 lijst = self.tellingen.setdefault("database_antwoorden", [])
                 lijst.append({**(b.get("samenvatting") or {}), "t": round(nu)})
-                del lijst[:-6]
+                del lijst[:-12]
                 self._bij_database(station_sn, b)
                 self.async_update_listeners()
                 return
@@ -360,8 +360,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                          "cloud_pad": p.get("crop_cloud_path") or None, "tijd": nu,
                                          "ruw": p}  # v0.7.10: alles bewaren om detectiesoorten te leren
                 if vorig.get("gebeurtenissen") != p.get("event_count"):
-                    nieuw = True
-                    self._beweging_uit_teller(station_sn, sn, vorig.get("gebeurtenissen"), p.get("event_count"), nu)
+                    nieuw = True  # v0.7.13: de opname zelf (trigger_type) bepaalt wat er gebeurde
                 gevraagd = self._beeld_voor.get(pad)
                 if pad and (self.beelden.get(sn) or {}).get("pad") != pad and \
                         (gevraagd is None or nu - gevraagd[1] > 120):

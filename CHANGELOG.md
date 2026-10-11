@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.13 — live kijken is geen persoon
+
+- `trigger_type` 4 blijkt bij de HomeBase 3 een opname door live kijken (app of HA), niet een persoon. Zulke opnames geven geen gebeurtenis meer; beweging komt nu uit de opname zelf (2 = beweging, 8 = aanbellen) in plaats van alleen uit de teller.
+- Persoon, huisdier, voertuig, geluid en pakket komen alleen uit de uitsneden (detection_type); die staan nu per opname in het attribuut `opnames` van *Opnames*.
+
 ## v0.7.12 — persoon, huisdier, voertuig, geluid en pakket
 
 - Uit de database van de HomeBase: `trigger_type` (4 = persoon, 8 = aanbellen) van elke opname en de uitsneden (`detection_type`: 1/2 persoon, 4 voertuig, 8 huisdier, 128 geluid, 256 huilen, 512/1024 pakket) via een lokale databasevraag (10017). Elke nieuwe opname (laatste 10 minuten) zet de bijbehorende detecties aan en geeft een gebeurtenis, één keer per soort.
