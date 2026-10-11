@@ -211,3 +211,15 @@ def test_momentopname_jpeg():
     jpeg, stream, stops = asyncio.run(_proef())
     assert jpeg[:2] == b"\xff\xd8" and len(jpeg) > 2000
     assert not stream.actief and stops == [1]  # meteen gestopt (batterij)
+
+
+def test_hevc_herkennen_en_jpeg():
+    data = (Path(__file__).parent / "testbeeld.hevc").read_bytes()
+    assert v.codec_van(data) == "hevc" and v.codec_van(_frames()[0]) == "h264"
+    assert v._is_idr(data, "hevc")
+    # alles in één keer: VPS/SPS/PPS + frames
+    jpeg = v.frames_naar_jpeg([data], codec="hevc")
+    assert jpeg[:2] == b"\xff\xd8"
+    # los keyframe zonder SPS/PPS + parametersets ervoor
+    sets = v.parametersets(_frames()[0])
+    assert sets and v.frames_naar_jpeg([_frames()[0]])[:2] == b"\xff\xd8"

@@ -76,6 +76,7 @@ class Frame:
     tijd: int
     soort: int
     audio: bool = False
+    codec: str = "h264"
 
 
 AAC_FREQ = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
@@ -144,17 +145,39 @@ def lees_videoframe(inhoud: bytes, signcode: int, sleutel: RsaSleutel | None) ->
         kop = ruw[:128]
         kop = kop[: len(kop) // 16 * 16]
         ruw = d.update(kop) + d.finalize() + ruw[len(kop):]
-    return Frame(ruw, keyframe or _is_idr(ruw), breedte, hoogte, fps or 15, tijd, soort)
+    codec = codec_van(ruw, soort)
+    return Frame(ruw, keyframe or _is_idr(ruw, codec), breedte, hoogte, fps or 15, tijd, soort, codec=codec)
 
 
-def _is_idr(data: bytes) -> bool:
-    """Bevat de data een H.264 IDR (5) of SPS (7)?"""
+HEVC_KOPPEN = {0x26, 0x28, 0x2A, 0x40, 0x42, 0x44, 0x4E}  # IDR, CRA, VPS, SPS, PPS, SEI (zoals eufy-security-client)
+
+
+def codec_van(data: bytes, soort: int = 0) -> str:
+    """"hevc" of "h264": eerst de streamsoort uit de kop (1 = H.264, 2 = H.265),
+    anders de eerste NAL-kop."""
+    if soort == 2:
+        return "hevc"
+    if soort == 1:
+        return "h264"
+    i = data.find(b"\x00\x00\x01")
+    if 0 <= i and i + 3 < len(data) and data[i + 3] in HEVC_KOPPEN:
+        return "hevc"
+    return "h264"
+
+
+def _nal_soort(b: int, codec: str) -> int:
+    return (b >> 1) & 0x3F if codec == "hevc" else b & 0x1F
+
+
+def _is_idr(data: bytes, codec: str = "h264") -> bool:
+    """Bevat de data een IDR of SPS (H.264: 5/7; H.265: 19/20/21/33)?"""
+    sleutels = (19, 20, 21, 33) if codec == "hevc" else (5, 7)
     i = 0
     while True:
         i = data.find(b"\x00\x00\x01", i)
         if i < 0 or i + 3 >= len(data):
             return False
-        if data[i + 3] & 0x1F in (5, 7):
+        if _nal_soort(data[i + 3], codec) in sleutels:
             return True
         i += 3
 
@@ -163,7 +186,7 @@ class TsMuxer:
     """H.264-frames naar MPEG-TS, per kijker (begint op een keyframe)."""
 
     def __init__(self, schrijf: Callable[[bytes], None], breedte: int, hoogte: int, fps: int,
-                 audio: "AudioFormaat | None" = None) -> None:
+                 audio: "AudioFormaat | None" = None, codec: str = "h264") -> None:
         import av
 
         class _Uit:
@@ -173,7 +196,7 @@ class TsMuxer:
 
         self._uit = _Uit()
         self._c = av.open(self._uit, "w", format="mpegts")
-        self._s = self._c.add_stream("h264", rate=max(1, fps))
+        self._s = self._c.add_stream(codec, rate=max(1, fps))
         self._s.width, self._s.height = breedte or 1920, hoogte or 1080
         self._s.time_base = Fraction(1, 1000)
         self._a = None
@@ -237,13 +260,14 @@ class LiveStream:
         self.formaat: tuple[int, int, int] | None = None
         self.audio: AudioFormaat | None = None
         self.audioframes = 0
+        self.codec: str | None = None
         self._stop_taak: asyncio.TimerHandle | None = None
         self.sessies = 0
         self.rust_tot = 0.0
 
     def samenvatting(self) -> dict[str, Any]:
         return {"actief": self.actief, "kijkers": len(self.kijkers), "frames": self.frames,
-                "keyframes": self.keyframes, "audioframes": self.audioframes,
+                "keyframes": self.keyframes, "audioframes": self.audioframes, "codec": self.codec,
                 "audio": f"AAC {self.audio.frequentie} Hz" if self.audio else None, "fouten": self.fouten, "laatste_fout": self.laatste_fout,
                 "formaat": self.formaat, "gestart": self.gestart, "laatste_frame": self.laatste_frame,
                 "sessies": self.sessies, "rust_tot": self.rust_tot or None}
@@ -323,6 +347,7 @@ class LiveStream:
         self.keyframes += f.keyframe
         self.laatste_frame = time.time()
         self.formaat = (f.breedte, f.hoogte, f.fps)
+        self.codec = f.codec
         for k in list(self.kijkers):
             _zet(k.wachtrij, f)
         if self.gestart and time.time() - self.gestart > MAX_DUUR_S:
@@ -366,7 +391,7 @@ async def stuur_ts(stream: LiveStream, schrijf_async: Callable[[bytes], Any]) ->
                     if time.monotonic() - begin > GEEN_BEELD_TIMEOUT_S:
                         return
                     continue
-                muxer = TsMuxer(buffer.append, f.breedte, f.hoogte, f.fps, stream.audio)
+                muxer = TsMuxer(buffer.append, f.breedte, f.hoogte, f.fps, stream.audio, f.codec)
             muxer.voeg_toe(f)
             if buffer:
                 data = b"".join(buffer)
@@ -378,17 +403,54 @@ async def stuur_ts(stream: LiveStream, schrijf_async: Callable[[bytes], Any]) ->
         stream.kijker_weg(k)
 
 
-def keyframe_naar_jpeg(data: bytes, kwaliteit: int = 85, max_breedte: int = 1920) -> bytes:
-    """Een H.264-keyframe (Annex B, met SPS/PPS) naar JPEG. Blokkerend: in een executor draaien."""
+def _nal_eenheden(data: bytes) -> list[bytes]:
+    """NAL-eenheden (met startcode) uit Annex B."""
+    import re
+
+    posities = [m.start() for m in re.finditer(b"\x00\x00\x01", data)]
+    uit = []
+    for i, p in enumerate(posities):
+        begin = p - 1 if p > 0 and data[p - 1] == 0 else p
+        einde = posities[i + 1] if i + 1 < len(posities) else len(data)
+        if einde < len(data) and data[einde - 1] == 0:
+            einde -= 1
+        uit.append(data[begin:einde])
+    return uit
+
+
+def parametersets(data: bytes, codec: str = "h264") -> bytes:
+    """SPS/PPS (en VPS) uit een frame, om voor een los keyframe te zetten."""
+    sets = (32, 33, 34) if codec == "hevc" else (7, 8)
+    uit = b""
+    for n in _nal_eenheden(data):
+        kop = n[3] if n[2] == 1 else n[4]
+        if _nal_soort(kop, codec) in sets:
+            uit += n
+    return uit
+
+
+def frames_naar_jpeg(frames: list[bytes], kwaliteit: int = 85, max_breedte: int = 1920,
+                     codec: str = "h264") -> bytes:
+    """H.264-frames (Annex B; het eerste een keyframe, liefst met SPS/PPS)
+    decoderen tot er een beeld is, en dat als JPEG. Blokkerend: executor."""
     import io
 
     import av
 
-    codec = av.CodecContext.create("h264", "r")
+    decoder = av.CodecContext.create(codec, "r")
     beelden = []
-    for pakket in codec.parse(data):
-        beelden += codec.decode(pakket)
-    beelden += codec.decode(None) if not beelden else []
+    for data in frames:
+        try:
+            beelden += decoder.decode(av.Packet(data))
+        except av.error.InvalidDataError:
+            continue
+        if beelden:
+            break
+    if not beelden:
+        try:
+            beelden += decoder.decode(None)
+        except av.error.EOFError:
+            pass
     if not beelden:
         raise ValueError("keyframe niet te decoderen")
     beeld = beelden[0].to_image()
@@ -399,21 +461,38 @@ def keyframe_naar_jpeg(data: bytes, kwaliteit: int = 85, max_breedte: int = 1920
     return uit.getvalue()
 
 
+def keyframe_naar_jpeg(data: bytes, kwaliteit: int = 85, max_breedte: int = 1920) -> bytes:
+    return frames_naar_jpeg([data], kwaliteit, max_breedte)
+
+
 async def momentopname(stream: LiveStream, timeout: float = 12.0) -> bytes:
-    """Live beeld: stream (kort) starten, eerste keyframe pakken, naar JPEG.
-    Kijkt er verder niemand, dan stopt de stream meteen daarna (batterij)."""
+    """Live beeld: stream (kort) starten, keyframe (+ een paar frames erna)
+    pakken, naar JPEG. Kijkt er verder niemand, dan stopt de stream meteen."""
     k = await stream.kijker_erbij()
     try:
         einde = time.monotonic() + timeout
+        sets = b""
+        verzameld: list[bytes] = []
         while True:
             rest = einde - time.monotonic()
             if rest <= 0:
-                raise TimeoutError("geen keyframe van de HomeBase")
+                raise TimeoutError("geen bruikbaar beeld van de HomeBase")
             f = await asyncio.wait_for(k.wachtrij.get(), rest)
             if f is None:
                 raise ConnectionError("stream gestopt")
-            if f.audio or not f.keyframe:
+            if f.audio:
                 continue
-            return await asyncio.get_running_loop().run_in_executor(None, keyframe_naar_jpeg, f.data)
+            ps = parametersets(f.data, f.codec)
+            if ps:
+                sets = ps
+            if not verzameld and not f.keyframe:
+                continue
+            verzameld.append(f.data if not verzameld and ps else (sets + f.data if not verzameld else f.data))
+            if len(verzameld) >= 4:
+                try:
+                    return await asyncio.get_running_loop().run_in_executor(
+                        None, frames_naar_jpeg, verzameld, 85, 1920, f.codec)
+                except ValueError:
+                    verzameld = []  # volgende keyframe proberen
     finally:
         stream.kijker_weg(k, meteen=True)

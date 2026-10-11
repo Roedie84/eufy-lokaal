@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.2 — momentopname robuuster, H.265
+
+- Momentopname: SPS/PPS uit eerdere frames worden voor het keyframe gezet en er worden een paar frames gedecodeerd tot er beeld is; lukt het niet, dan het volgende keyframe.
+- H.265 (HEVC) wordt herkend (streamsoort in de kop of de NAL-kop) en zo ook in de livestream en de momentopname gebruikt.
+
 ## v0.7.1 — live momentopname bij aanbellen
 
 - Bij aanbellen haalt de integratie meteen een **live beeld** op: livestream kort starten, het eerste keyframe naar JPEG (PyAV + Pillow), stream direct weer stoppen. Te zien als **Live momentopname** (image-entiteit) en als gebeurtenis `eufy_lokaal_momentopname`.
