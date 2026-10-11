@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 DOMAIN = "eufy_lokaal"
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "select", "alarm_control_panel"]
 
 CONF_LAND = "land"
 CONF_EMAIL = "email"

@@ -50,6 +50,7 @@ def test_coordinator_verwerkt_berichten():
     c.apparaten = {"T8113": {"device_sn": "T8113", "station_sn": "T8030", "device_channel": 2}}
     c.lokale_params, c.alarmstand, c.laatste_melding, c.berichten_per_soort = {}, {}, {}, {}
     c.async_update_listeners = MagicMock()
+    c.sessies = {}
     bij = c._bij_bericht_voor("T8030")
     bij({"soort": "camera_info", "naam": "camera_info", "kanaal": 255,
          "parameters": {255: {1151: "1", 1224: "0"}, 2: {1101: "64"}}})

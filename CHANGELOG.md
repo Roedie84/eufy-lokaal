@@ -1,5 +1,13 @@
 # Changelog — Eufy Lokaal
 
+## v0.4.0 — stap 4: bewakingsstand lokaal instellen
+
+- Nieuw: **Bewakingsstand** (select: weg, thuis, schema, aangepast 1-3, geofence, uitgeschakeld) en **Alarm** (alarmpaneel: weg, thuis, aangepast, uitschakelen) per HomeBase.
+- Zoals de app op firmware ≥ 2.0.7.9: CMD_SET_PAYLOAD (1350) met CMD_SET_ARMING (1224), versleuteld. De integratie wacht op de returncode van de HomeBase en meldt een weigering als fout; daarna worden de parameters ververst.
+- Een melding van een nieuwe alarmstand (ook vanuit de app) ververst de parameters, zodat de bewakingsstand meeloopt.
+- Het enige dat de integratie verandert is de bewakingsstand; de broncodetoets bewaakt dat.
+- RSA-fout bij de sessiesleutel geeft nu de oorzaak.
+
 ## v0.3.0 — stap 3: lokale berichten en parameters (alleen lezen)
 
 - Na de sessiesleutel vraagt de integratie CMD_CAMERA_INFO (1103) op: alle parameters van HomeBase en apparaten, lokaal. Elke 10 minuten opnieuw. Verstuurde opdrachten worden herhaald tot de HomeBase ze bevestigt.

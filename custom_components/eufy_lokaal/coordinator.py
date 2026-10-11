@@ -233,6 +233,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             elif soort == "alarmstand":
                 self.alarmstand[station_sn] = {"waarde": b["waarde"], "naam": b["alarmstand"],
                                                "bron": "melding station", "sinds": nu}
+                # De bewakingsstand (1224) kan mee veranderd zijn: parameters verversen.
+                self._ververs_parameters_straks(station_sn)
             if soort in ("ping", "antwoord", "camera_info"):
                 self.async_update_listeners()
                 return
@@ -242,6 +244,41 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             self.hass.bus.async_fire(f"{DOMAIN}_bericht", gebeurtenis)
             self.async_update_listeners()
         return bij_bericht
+
+    def _ververs_parameters_straks(self, station_sn: str, na_s: float = 3.0) -> None:
+        s = self.sessies.get(station_sn)
+        if s is not None:
+            self.hass.loop.call_later(na_s, s.vraag_camera_info)
+
+    async def async_zet_bewakingsstand(self, station_sn: str, stand: int) -> None:
+        """Stap 4: de bewakingsstand lokaal zetten, zoals de app dat doet."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        s = self.sessies.get(station_sn)
+        if s is None or not s.levend:
+            raise HomeAssistantError("Geen lokale verbinding met de HomeBase")
+        lid = (self.stations.get(station_sn) or {}).get("member") or {}
+        account = str(lid.get("admin_user_id") or self.cloud.sessie.user_id or "")
+        gebruiker = str(lid.get("nick_name") or "Home Assistant")
+        try:
+            code = await s.zet_bewakingsstand(account, stand, gebruiker)
+        except (TimeoutError, ConnectionError) as err:
+            raise HomeAssistantError(f"HomeBase antwoordde niet: {err or 'geen antwoord binnen 10 s'}") from err
+        self.tellingen["laatste_stand_opdracht"] = {"stand": stand, "returncode": code, "tijd": time.time()}
+        if code != 0:
+            raise HomeAssistantError(f"HomeBase weigerde de bewakingsstand (code {code})")
+        # optimistisch bijwerken; de HomeBase bevestigt met 1151 en de parameters
+        params = self.lokale_params.setdefault(station_sn, {}).setdefault(KANAAL_STATION, {})
+        params[PARAM_BEWAKINGSSTAND] = str(stand)
+        self._ververs_parameters_straks(station_sn)
+        self.async_update_listeners()
+
+    def bewakingsstand_waarde(self, station_sn: str) -> int | None:
+        w = self.lokale_parameters(station_sn).get(PARAM_BEWAKINGSSTAND)
+        try:
+            return int(w) if w is not None else None
+        except ValueError:
+            return None
 
     def bewakingsstand(self, station_sn: str) -> str | None:
         w = self.lokale_parameters(station_sn).get(PARAM_BEWAKINGSSTAND)
@@ -277,7 +314,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         ms = t["ms"]
         rondes = t["zoekrondes"] * max(1, len([s for s in self.stations.values() if s.get("p2p_did")]))
         return {
-            "stap": "3 - lokale berichten en parameters (alleen lezen)",
+            "stap": "4 - lokale berichten, parameters en bewakingsstand",
+            "laatste_stand_opdracht": t.get("laatste_stand_opdracht"),
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],

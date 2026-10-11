@@ -157,7 +157,8 @@ def test_stuurt_niets_dat_iets_verandert():
     assert "TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})" in code
     assert code.count("self._stuur_opdracht(") == 1
     assert code.count("opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO") == 1
-    assert code.count("self._verstuur_data(") == 2
+    assert code.count("opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD") == 1
+    assert code.count("self._verstuur_data(") == 3
 
 
 def test_v021_pakketten_tellen_en_meting_loopt_door():

@@ -27,14 +27,21 @@ Verloop:
    Berichten op het CONTROL-kanaal zijn met niveau 1 versleuteld, antwoorden
    op het DATA-kanaal met de sessiesleutel.
 
-Wat deze integratie (nog) NOOIT doet: een opdracht sturen die iets verandert.
-Alleen CHECK_CAM, PING/PONG, ACK, CMD_GATEWAYINFO en CMD_CAMERA_INFO. Een
-broncodetoets bewaakt dat.
+6. stap 4: de bewakingsstand instellen. Op deze firmware via CMD_SET_PAYLOAD
+   (1350) met JSON `{"account_id", "cmd": 1224, "mValue3": 0, "payload":
+   {"mode_type", "user_name"}}`, versleuteld. Het station antwoordt met een
+   returncode (0 = gelukt) en meldt daarna de nieuwe alarmstand (1151).
+
+Het enige dat deze integratie verandert is de bewakingsstand. Alleen
+CHECK_CAM, PING/PONG, ACK, CMD_GATEWAYINFO, CMD_CAMERA_INFO en
+CMD_SET_PAYLOAD met daarin uitsluitend CMD_SET_ARMING. Een broncodetoets
+bewaakt dat.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import struct
 import time
@@ -69,6 +76,9 @@ KANAAL_STATION = 255
 CMD_GATEWAYINFO = 1100
 CMD_CAMERA_INFO = 1103
 CMD_PING = 1139
+CMD_SET_ARMING = 1224
+CMD_SET_PAYLOAD = 1350
+BEWAKINGSSTANDEN = frozenset({0, 1, 2, 3, 4, 5, 47, 63})
 
 HARTSLAG_S = 5.0
 MAX_ZONDER_PONG_S = 30.0
@@ -78,7 +88,8 @@ TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})
 TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})
 # Opdrachten die het station versleuteld verwacht (deel van de lijst van
 # eufy-security-client; alleen wat deze integratie stuurt).
-VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO})
+VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO, CMD_SET_PAYLOAD})
+ANTWOORD_TIMEOUT_S = 10.0
 CAMERA_INFO_ELKE_S = 600.0
 OPNIEUW_NA_S = 1.0
 MAX_OPNIEUW = 4
@@ -120,6 +131,37 @@ def opdracht_met_getal(volgnr: int, opdracht: int, waarde: int, sleutel: bytes |
     versleuteld = opdracht in VERSLEUTELDE_OPDRACHTEN and niveau > 0 and sleutel is not None and len(sleutel) == 16
     if versleuteld:
         data = aes_ecb_versleutel(sleutel, data.ljust(16, b"\x00"))
+    kop = bytes([0xD1, SOORT_DATA]) + struct.pack(">H", volgnr) + MAGIC + struct.pack("<H", opdracht)
+    inhoud = (struct.pack("<H", len(data)) + b"\x00\x00" + b"\x01\x00"
+              + bytes([kanaal & 0xFF, niveau if versleuteld else 0]) + b"\x00\x00" + data)
+    return bericht(DATA, kop + inhoud)
+
+
+def bewakingsstand_tekst(account_id: str, stand: int, gebruiker: str) -> str:
+    """De JSON voor CMD_SET_PAYLOAD die de bewakingsstand zet (zoals de app)."""
+    if stand not in BEWAKINGSSTANDEN:
+        raise ValueError(f"onbekende bewakingsstand {stand}")
+    return json.dumps({"account_id": account_id, "cmd": CMD_SET_ARMING, "mValue3": 0,
+                       "payload": {"mode_type": stand, "user_name": gebruiker}}, separators=(",", ":"))
+
+
+def opdracht_met_tekst(volgnr: int, opdracht: int, tekst: str, sleutel: bytes | None = None,
+                       niveau: int = 0, kanaal: int = KANAAL_STATION) -> bytes:
+    """Een DATA-pakket met een JSON-tekst. Alleen CMD_SET_PAYLOAD met daarin
+    CMD_SET_ARMING en een geldige stand; al het andere wordt geweigerd."""
+    if opdracht != CMD_SET_PAYLOAD:
+        raise ValueError(f"opdracht {opdracht} is niet toegestaan")
+    try:
+        j = json.loads(tekst)
+    except ValueError as err:
+        raise ValueError("geen geldige JSON") from err
+    if not isinstance(j, dict) or j.get("cmd") != CMD_SET_ARMING or \
+            (j.get("payload") or {}).get("mode_type") not in BEWAKINGSSTANDEN:
+        raise ValueError("alleen de bewakingsstand mag gezet worden")
+    data = tekst.encode()
+    versleuteld = opdracht in VERSLEUTELDE_OPDRACHTEN and niveau > 0 and sleutel is not None and len(sleutel) == 16
+    if versleuteld:
+        data = aes_ecb_versleutel(sleutel, data.ljust((len(data) + 15) // 16 * 16, b"\x00"))
     kop = bytes([0xD1, SOORT_DATA]) + struct.pack(">H", volgnr) + MAGIC + struct.pack("<H", opdracht)
     inhoud = (struct.pack("<H", len(data)) + b"\x00\x00" + b"\x01\x00"
               + bytes([kanaal & 0xFF, niveau if versleuteld else 0]) + b"\x00\x00" + data)
@@ -256,6 +298,7 @@ class Meting:
     laatste_data: list = field(default_factory=list)
     voorbeelden: dict = field(default_factory=dict)
     sleutel_pogingen: list = field(default_factory=list)
+    opdrachten_gestuurd: dict = field(default_factory=dict)
 
     def data_pakket(self, data: bytes, oordeel: str) -> None:
         self.laatste_data.append({"t": round(time.time(), 1), "lengte": len(data),
@@ -327,6 +370,7 @@ class P2PSessie:
         self._bij_bericht = bij_bericht
         self._open: dict[int, tuple[bytes, int, float]] = {}  # volgnr -> (pakket, pogingen, tijd)
         self._camera_info_t = 0.0
+        self._wacht_op: dict[int, asyncio.Future] = {}  # opdracht -> antwoord (returncode)
 
     def _stuur(self, data: bytes, adres) -> None:
         if self._transport is None:
@@ -401,6 +445,28 @@ class P2PSessie:
         self._camera_info_t = time.monotonic()
         self._verstuur_data(opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO, KANAAL_STATION,
                                                self.sleutel, self.meting.niveau))
+
+    async def zet_bewakingsstand(self, account_id: str, stand: int, gebruiker: str) -> int:
+        """Stap 4: de bewakingsstand zetten. Geeft de returncode van het
+        station (0 = gelukt); TimeoutError als het niet antwoordt."""
+        if self._transport is None or self._adres is None or not self.meting.verbonden:
+            raise ConnectionError("geen lokale verbinding met het station")
+        if self.sleutel is None:
+            raise ConnectionError("sessie nog niet versleuteld")
+        tekst = bewakingsstand_tekst(account_id, stand, gebruiker)
+        oud = self._wacht_op.pop(CMD_SET_PAYLOAD, None)
+        if oud is not None and not oud.done():
+            oud.cancel()
+        wacht = asyncio.get_running_loop().create_future()
+        self._wacht_op[CMD_SET_PAYLOAD] = wacht
+        self._verstuur_data(opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD, tekst,
+                                               self.sleutel, self.meting.niveau))
+        self.meting.opdrachten_gestuurd[str(CMD_SET_PAYLOAD)] = \
+            self.meting.opdrachten_gestuurd.get(str(CMD_SET_PAYLOAD), 0) + 1
+        try:
+            return await asyncio.wait_for(wacht, ANTWOORD_TIMEOUT_S)
+        finally:
+            self._wacht_op.pop(CMD_SET_PAYLOAD, None)
 
     def _verstuur_data(self, pakket: bytes) -> None:
         """Verstuur en houd vast tot het station het bevestigt (ACK)."""
@@ -501,6 +567,10 @@ class P2PSessie:
                 except Exception:  # noqa: BLE001
                     pass
         self.meting.noteer(kop, len(inhoud), resultaat)
+        if resultaat and kop.opdracht in self._wacht_op:
+            wacht = self._wacht_op[kop.opdracht]
+            if not wacht.done():
+                wacht.set_result(struct.unpack("<i", inhoud[:4])[0] if len(inhoud) >= 4 else -1)
         if self._bij_bericht is not None:
             from .berichten import ontleed
 
@@ -564,5 +634,6 @@ class P2PSessie:
             "laatste_data": m.laatste_data[-8:],
             "voorbeelden": m.voorbeelden,
             "sleutel_bron": m.sleutel_bron,
+            "opdrachten_gestuurd": m.opdrachten_gestuurd,
             "sleutel_pogingen": m.sleutel_pogingen,
         }
