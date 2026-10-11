@@ -16,6 +16,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import p2p
+from .gebeurtenissen import FILTER_DETECTIES
 from .berichten import (KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND,
                         alarmstand_naam)
 from .p2p_sessie import P2PSessie
@@ -337,11 +338,17 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
                               (nu + timedelta(days=1)).strftime("%Y%m%d"),
                               int(time.time() * 1000), aantal=50), "opnames")
-        # v0.7.12: ook de uitsneden (wat er gezien is: persoon, voertuig, dier, ...)
-        s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
-                              (nu + timedelta(days=1)).strftime("%Y%m%d"),
-                              int(time.time() * 1000) + 1, aantal=50, vraag=10017,
-                              vanaf=(nu - timedelta(minutes=15)).strftime("%Y%m%d%H%M%S")), "uitsneden")
+        # v0.7.14: 10017 (met uitsneden) kent de HomeBase 3 niet (ERROR_NO_SUPPORT). Wel kan 10006
+        # filteren op detection_type: per soort vragen welke opnames van vandaag die soort hebben.
+        filtervragen = self.__dict__.setdefault("_filtervragen", {})
+        for i, bits in enumerate(FILTER_DETECTIES):
+            transactie = f"{int(time.time() * 1000)}{i}"
+            filtervragen[transactie] = bits
+            s.vraag(opnames_tekst(self._account(station_sn), apparaten, nu.strftime("%Y%m%d"),
+                                  (nu + timedelta(days=1)).strftime("%Y%m%d"), 0, aantal=20,
+                                  detectie=bits, transactie=transactie), f"opnames_{bits}")
+        while len(filtervragen) > 30:
+            filtervragen.pop(next(iter(filtervragen)))
 
     def _bij_database(self, station_sn: str, b: dict) -> None:
         from .p2p_sessie import afbeelding_tekst
@@ -371,6 +378,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 self.hass.loop.call_later(2, self._vraag_opnames, station_sn)
         elif b.get("sub_opdracht") == 10017:
             self._bij_uitsneden(station_sn, b.get("data") or [], nu)
+        elif b.get("sub_opdracht") == 10006 and (b.get("samenvatting") or {}).get("transaction") in \
+                self.__dict__.get("_filtervragen", {}):
+            bits = self._filtervragen.pop((b.get("samenvatting") or {}).get("transaction"))
+            self._bij_filter(station_sn, bits, b.get("data") or [], nu)
         elif b.get("sub_opdracht") == 10006:
             per_apparaat: dict[str, dict[int, dict]] = {}
             tabellen = [{"table_name": "history_record_info", "payload": b.get("data") or []}]
@@ -503,6 +514,30 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             return int(w) if w is not None else None
         except ValueError:
             return None
+
+    def _bij_filter(self, station_sn: str, bits: int, records: list, nu: float) -> None:
+        """Antwoord op een gefilterde 10006: deze opnames hebben de detectiesoort `bits`.
+        Negeert de HomeBase het filter (zelfde lijst als zonder filter), dan niets doen."""
+        ids = {r.get("record_id") for r in records if isinstance(r, dict)}
+        alle = {r.get("record_id") for lijst in self.opnames.values() for r in lijst}
+        stats = self.tellingen.setdefault("detectiefilter", {})
+        if not ids:
+            stats[str(bits)] = "0 opnames"
+            return
+        recent = {r.get("record_id") for lijst in self.opnames.values() for r in lijst[:5]}
+        if recent and recent <= ids and len(ids) >= len(alle) * 0.9:
+            stats[str(bits)] = f"genegeerd ({len(ids)} = alles)"
+            return
+        stats[str(bits)] = f"{len(ids)} opnames"
+        uitsneden = self.__dict__.setdefault("uitsneden", {})
+        for r in records:
+            rid = r.get("record_id")
+            u = uitsneden.setdefault(rid, {"bits": 0, "bekend": False, "ruw": []})
+            u["bits"] |= bits
+            if r.get("device_sn"):
+                self._meld_opname(station_sn, r["device_sn"], r, nu)
+        while len(uitsneden) > 300:
+            uitsneden.pop(next(iter(uitsneden)))
 
     def _bij_uitsneden(self, station_sn: str, tabellen: list, nu: float) -> None:
         """10017: per opname de detectiebits (OR van alle uitsneden) en of de persoon bekend is."""
@@ -687,6 +722,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "antwoorden": t.get("antwoorden"),
             "database_antwoorden": t.get("database_antwoorden"),
             "herverbonden": t.get("herverbonden"),
+            "detectiefilter": t.get("detectiefilter"),
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],

@@ -66,6 +66,11 @@ DETECTIE_BITS = [
 ]
 
 
+# Per soort één gefilterde opnamevraag (10006 met detection_type): persoon (gezicht+lichaam),
+# voertuig, huisdier.
+FILTER_DETECTIES = (1 | 2, 4, 8)
+
+
 def soorten_uit_opname(trigger_type, detectie_bits: int = 0, bekend_persoon: bool = False) -> list[str]:
     """Welke gebeurtenissen bij een opname horen (zonder dubbelen, in vaste volgorde)."""
     uit: list[str] = []

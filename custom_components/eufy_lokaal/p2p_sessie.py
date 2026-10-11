@@ -187,7 +187,8 @@ def laatste_info_tekst(account_id: str, nu_ms: int) -> str:
 
 
 def opnames_tekst(account_id: str, serienummers: list[str], begin: str, einde: str, nu_ms: int,
-                  aantal: int = 20, vraag: int = 10006, vanaf: str | None = None) -> str:
+                  aantal: int = 20, vraag: int = 10006, vanaf: str | None = None, detectie: int = 0,
+                  transactie: str | None = None) -> str:
     """Opnames op de HomeBase tussen twee datums (JJJJMMDD); 10006 geeft een
     platte lijst (CMD_DATABASE_QUERY_BY_DATE), 10017 (CMD_DATABASE_QUERY_LOCAL) ook
     de uitsneden met detection_type (persoon/voertuig/dier/geluid/pakket)."""
@@ -195,12 +196,13 @@ def opnames_tekst(account_id: str, serienummers: list[str], begin: str, einde: s
         raise ValueError(f"databasevraag {vraag} niet toegestaan")
     return json.dumps({"account_id": account_id, "cmd": CMD_DATABASE, "mChannel": 0, "mValue3": 0,
                        "payload": {"cmd": vraag, "payload": {
-                           "count": aantal, "detection_type": 0,
+                           "count": aantal, "detection_type": int(detectie),
                            "device_info": [{"device_sn": s} for s in serienummers],
                            "end_date": einde, "event_type": 0, "flag": 0, "res_unzip": 1,
                            "start_date": begin, "start_time": vanaf or f"{begin}000000", "storage_cloud": -1,
                            "ai_type": 0},
-                           "table": "history_record_info", "transaction": str(nu_ms)}}, separators=(",", ":"))
+                           "table": "history_record_info", "transaction": transactie or str(nu_ms)}},
+                      separators=(",", ":"))
 
 
 def afbeelding_tekst(account_id: str, bestand: str) -> str:

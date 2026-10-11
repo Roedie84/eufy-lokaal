@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.14 — detectiesoorten via gefilterde opnamevraag
+
+- De HomeBase 3 kent de lokale vraag met uitsneden (10017) niet (ERROR_NO_SUPPORT). Nu vraagt de integratie per soort (persoon, voertuig, huisdier) de opnames van vandaag op met het filter `detection_type`; opnames die terugkomen krijgen die soort. Negeert de HomeBase het filter (dezelfde lijst als zonder filter), dan gebeurt er niets; de uitkomst staat in de diagnostiek onder `detectiefilter`.
+
 ## v0.7.13 — live kijken is geen persoon
 
 - `trigger_type` 4 blijkt bij de HomeBase 3 een opname door live kijken (app of HA), niet een persoon. Zulke opnames geven geen gebeurtenis meer; beweging komt nu uit de opname zelf (2 = beweging, 8 = aanbellen) in plaats van alleen uit de teller.
