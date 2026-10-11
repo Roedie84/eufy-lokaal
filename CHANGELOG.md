@@ -1,5 +1,31 @@
 # Changelog — Eufy Lokaal
 
+## v0.2.0 — stap 2: een lokale, versleutelde P2P-sessie met de HomeBase
+
+Stap 1 vond de HomeBase lokaal (192.168.2.52, ~20 ms). Nu een eigen sessie:
+
+- **Verbinden**: CHECK_CAM met de p2p_did naar het gevonden adres (en ±3
+  poorten), wachten op CAM_ID; daarna elke 5 s PING, en PONG op elke PING
+  van het station. Geen PONG in 20 s = uitval; bij de volgende zoekronde
+  (elke minuut) wordt opnieuw verbonden.
+- **Sessiesleutel**: eerste opdracht CMD_GATEWAYINFO (1100). Het antwoord
+  geeft een cipher-id en een RSA-versleutelde sleutel; de RSA-sleutel komt
+  één keer uit de cloud (`v2/app/cipher/get_ciphers`) en wordt bewaard
+  zolang de integratie draait. Lukt dat niet: niveau 1 (sleutel uit
+  serienummer en p2p_did).
+- **Berichten**: elk DATA-pakket krijgt een ACK, wordt in volgorde gezet en
+  ingelezen (16 bytes kop "XZYH"), ook als het over meerdere pakketten
+  loopt; versleutelde inhoud wordt met de sessiesleutel ontsleuteld. Deze
+  stap telt per opdracht wat het station stuurt - de basis voor stap 3.
+- **Alleen lezen**: buiten CHECK_CAM, PING/PONG, ACK en CMD_GATEWAYINFO
+  stuurt deze versie niets (broncodetoets).
+- Nieuwe sensor per station: **P2P** (verbonden, versleuteld / niet
+  verbonden), met rtt, versleutelingsniveau, aantal berichten per opdracht
+  en de laatste berichten.
+
+Tests: 26 (o.a. RSA-vector uit Node.js, berichten over meerdere pakketten,
+volledige sessie tegen een nagebootst station).
+
 ## v0.1.2 — eigen icoon
 
 Een eigen icoon in `brand/` (schild met cameralens), zodat de integratie in

@@ -8,8 +8,8 @@ eufy-security-ws, geen integratie van derden.
 
 | Stap | Wat | Status |
 |---|---|---|
-| 1 | Apparaten en P2P-gegevens uit de cloud (eenmalig inloggen), stations lokaal vinden | **v0.1** |
-| 2 | Lokale, versleutelde P2P-verbinding met het basisstation: status, batterijen | gepland |
+| 1 | Apparaten en P2P-gegevens uit de cloud (eenmalig inloggen), stations lokaal vinden | v0.1 ✓ |
+| 2 | Lokale, versleutelde P2P-verbinding met het basisstation | **v0.2** |
 | 3 | Gebeurtenissen lokaal: beweging, aanbellen, persoon, pakket | gepland |
 | 4 | Alarmstand lezen en zetten | gepland |
 | 5 | Snapshots en opnames | gepland |

@@ -302,6 +302,24 @@ class EufyCloud:
     async def apparaten(self) -> list[dict]:
         return await self._lijst("v2/house/device_list")
 
+    async def cipher(self, cipher_id: int, user_id: str) -> str | None:
+        """De RSA-sleutel bij een cipher-id (stap 2: de sessiesleutel van de
+        P2P-verbinding ontsleutelen). `user_id` is de beheerder van het
+        station (`member.admin_user_id`)."""
+        await self.zorg_ingelogd()
+        uit = await self._post("v2/app/cipher/get_ciphers", {
+            "cipher_ids": [cipher_id], "user_id": user_id,
+            "transaction": str(int(time.time() * 1000)),
+        })
+        if uit.get("code") != CODE_OK or not uit.get("data"):
+            raise CloudFout(f"cipher {cipher_id}: {uit.get('msg')}", uit.get("code"))
+        data = uit["data"]
+        lijst = self._ontsleutel_data(data) if isinstance(data, str) else data
+        for c in lijst if isinstance(lijst, list) else []:
+            if int(c.get("cipher_id", -1)) == int(cipher_id):
+                return c.get("private_key")
+        return None
+
 
 def parameter(item: dict, soort: int) -> Any:
     """Een waarde uit `params` (param_type -> param_value), als getal waar het kan."""

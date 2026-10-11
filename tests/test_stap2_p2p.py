@@ -1,0 +1,113 @@
+"""Stap 2: de lokale P2P-sessie - pakketten, opbouw van berichten, de
+sessiesleutel (RSA-vector gemaakt met Node.js crypto, zoals
+eufy-security-client hem gebruikt) en een volledige sessie tegen een
+nagebootst station."""
+import asyncio
+import json
+import re
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+from custom_components.eufy_lokaal import p2p_sessie as ps  # noqa: E402
+from custom_components.eufy_lokaal.p2p import bericht, did_naar_bytes  # noqa: E402
+
+MAP = Path(__file__).parents[1] / "custom_components" / "eufy_lokaal"
+NODE = json.loads(r'''{"pem":"-----BEGIN PRIVATE KEY-----\nMIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBALgKtaiecIjtgTv5\nMTuxQEwD3EEFqcTXqOwlh19+S4Xc5+zBiQMdv5dhzlJXvqnoJ2LYaf0mkREmqPIx\nu9j2K/sh37pal2aWJ3SZR2Diu1bC2sls0+XBGeMKL9BPrgdaRhQLBC0zAOgWMlG3\nA0BZNFM/nFMlMPnlqDs7ZCcrJHI7AgMBAAECgYAbY3SfUFzc88NswmviP0GbTmPD\nxWz7X0DDS952hpwEothc8nxKW238wFBtDqPQMz1RR3WWd9vU2pT/3gjfg9sNdp8c\n1PJKFEZrjETQBMAETDqQwfCYb5dQSWxuKeQVY8VwkSWvRdN0fgrlISXP3XcyKcKj\nWdAj5vI06YiYorDBwQJBAO36CC4mxNNUN/KlRw7XbhpUQbGmULrjIc6wbmSYY0t+\nTVgcFB1NLRhfcBaKOLxiAcDpHJmYGs0vJtf/hLwP/xsCQQDF+viziXZOI2Cysq6q\nz4nyp4ZTpTZQvU6WKrCg7S9PF+CQdlOho5sIwlcjt0pa1OaCAzcO9QlukIyjgSLB\nJethAkAbnIseb7kenALx0GNyQWSxAV2t8xIi3P+rL6VfXp8Gv1zSAFAFJlM5JLmo\no9j5YpW5gFKlL5TMgdAL98W63FBJAkBtyphROFIbUxM1BlJG94EQyEZ97IkKjXEf\nZd094UrzGdK3SmdmpEw9t0iLzgG2DYsnXpESAmGQpyjXI64aXuUBAkEAh253RivX\ndLCfOSwIGmCwox3BDLJJvrbuMlI+JWxaiSO4RJ5jQhlCCsib1VnX1ETzCWrS0QN9\naYntC66G1q/4Tg==\n-----END PRIVATE KEY-----\n","enc":"7368d94544719f116401507c1ba551ed308efb893fe2c31492738cf9addd7a6799b362fa56387ebaaa8d99480ef1e6c07fc723757f89f4128b25ff3db19a5fff71de84d6dfe797dae2a2ec153ecca67db504da1bb0667a2adbf4da01ffff77f4fe0ae5a5a53bdb47a5027a552082f9cb1ee42527f5d32c6e214284fb10ecd7a1"}''')
+DID = "EUPRAKM-012345-ABCDE"
+
+
+def test_check_cam_en_ack():
+    assert ps.check_cam(DID) == b"\xf1\x41\x00\x17" + did_naar_bytes(DID) + b"\x00\x00\x00"
+    assert ps.ack(0, 7) == bytes.fromhex("f1d10006d1000001 0007".replace(" ", ""))
+
+
+def test_gatewayinfo_opdracht():
+    pakket = ps.opdracht_zonder_data(0, ps.CMD_GATEWAYINFO)
+    assert pakket[:2] == ps.DATA and pakket[4:6] == b"\xd1\x00"
+    kop = ps.lees_kop(pakket[8:])
+    assert kop.opdracht == 1100 and kop.kanaal == 255
+
+
+def test_geen_andere_opdrachten():
+    try:
+        ps.opdracht_zonder_data(0, 1224)  # CMD_SET_ARMING
+    except ValueError:
+        return
+    raise AssertionError
+
+
+def test_bericht_over_meerdere_pakketten():
+    inhoud = bytes(range(40))
+    kop = ps.MAGIC + struct.pack("<H", 1351) + struct.pack("<I", len(inhoud)) + b"\x00\x00" + bytes([255, 0, 0, 0])
+    b = ps.Bouwer()
+    assert b.voeg_toe(kop + inhoud[:10]) == []
+    klaar = b.voeg_toe(inhoud[10:])
+    assert len(klaar) == 1 and klaar[0][0].opdracht == 1351 and klaar[0][1] == inhoud
+
+
+def test_rsa_sessiesleutel_als_node():
+    assert ps.rsa_ontsleutel(NODE["pem"], bytes.fromhex(NODE["enc"])) == b"0123456789abcdef"
+
+
+def test_niveau1_sleutel():
+    assert ps.niveau1_sleutel("T8030T2325281762", DID) == b"5281762-012345-A"
+
+
+def test_gatewayinfo_uitlezen():
+    inhoud = struct.pack("<I", 0) + struct.pack("<H", 7) + b"\x00\x00" + b"SLEUTEL" + b"\x00rest"
+    assert ps.gatewayinfo_uit(inhoud) == (7, b"SLEUTEL")
+
+
+def test_sessie_tegen_een_nep_station():
+    async def _proef():
+        class _Station(asyncio.DatagramProtocol):
+            def connection_made(self, t):
+                self.t = t
+                self.opdrachten = []
+
+            def datagram_received(self, data, adres):
+                if data[:2] == ps.CHECK_CAM:
+                    self.t.sendto(bericht(ps.CAM_ID, did_naar_bytes(DID)), adres)
+                elif data[:2] == ps.PING:
+                    self.t.sendto(bericht(ps.PONG), adres)
+                elif data[:2] == ps.DATA:
+                    volgnr = struct.unpack(">H", data[6:8])[0]
+                    self.t.sendto(ps.ack(0, volgnr), adres)
+                    kop = ps.lees_kop(data[8:])
+                    self.opdrachten.append(kop.opdracht)
+                    sleutel = bytes.fromhex(NODE["enc"])
+                    inhoud = struct.pack("<I", 0) + struct.pack("<H", 3) + b"\x00\x00" + sleutel
+                    antwoord = (ps.MAGIC + struct.pack("<H", kop.opdracht) + struct.pack("<I", len(inhoud))
+                                + b"\x00\x00" + bytes([255, 0, 1, 0]) + inhoud)
+                    self.t.sendto(bericht(ps.DATA, b"\xd1\x00" + struct.pack(">H", 0) + antwoord), adres)
+
+        lus = asyncio.get_running_loop()
+        t, station = await lus.create_datagram_endpoint(_Station, local_addr=("127.0.0.1", 0))
+        poort = t.get_extra_info("sockname")[1]
+
+        async def haal(cipher_id):
+            assert cipher_id == 3
+            return NODE["pem"]
+
+        s = ps.P2PSessie("T8030T2325281762", DID, "127.0.0.1", poort, haal)
+        try:
+            assert await s.verbind()
+            await asyncio.sleep(0.3)
+            return s, station
+        finally:
+            s.sluit()
+            t.close()
+
+    s, station = asyncio.run(_proef())
+    assert station.opdrachten == [1100]
+    assert s.meting.verbindingen == 1 and s.meting.niveau == 2 and s.sleutel == b"0123456789abcdef"
+    assert s.meting.per_opdracht == {"1100": 1}
+
+
+def test_stuurt_niets_dat_iets_verandert():
+    code = (MAP / "p2p_sessie.py").read_text()
+    code = re.sub(r'"""[\s\S]*?"""', "", code)
+    assert "TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})" in code
+    assert code.count("self._stuur_opdracht(") == 1

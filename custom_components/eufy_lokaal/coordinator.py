@@ -16,6 +16,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import p2p
+from .p2p_sessie import P2PSessie
 from .cloud import PARAM_LAN_IP, CaptchaNodig, CloudFout, EMailCodeNodig, EufyCloud, Sessie, parameter
 from .const import (
     CLOUD_INTERVAL_S,
@@ -89,6 +90,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                           "cloud_rondes": 0, "cloud_fouten": 0, "laatste_fout": None}
         self._afmelden = None
         self._laatste_adressen: list[str] = []
+        self.sessies: dict[str, P2PSessie] = {}
+        self._ciphers: dict[int, str] = {}
 
     # cloud ----------------------------------------------------------------------
 
@@ -156,7 +159,47 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 "gevonden": True, "ip": g.ip, "poort": g.poort, "ms": g.ms,
                 "laatst_gezien": nu, "laatst_gezocht": nu,
             }
+        await self._houd_sessies()
         self.async_update_listeners()
+
+    # stap 2: de P2P-sessie ------------------------------------------------------------
+
+    async def _houd_sessies(self) -> None:
+        """Per gevonden station een sessie; bij uitval opnieuw verbinden."""
+        for sn, l in self.lokaal.items():
+            if not l.get("gevonden"):
+                continue
+            s = self.sessies.get(sn)
+            if s is not None and s.levend and (s.ip, s.poort) == (l["ip"], l["poort"]):
+                continue
+            vorige = s.meting if s is not None else None
+            if s is not None:
+                s.sluit()
+            station = self.stations.get(sn) or {}
+            nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn))
+            if vorige is not None:
+                nieuw.meting.verbindingen = vorige.verbindingen
+                nieuw.meting.uitval = vorige.uitval + (1 if vorige.verbonden else 0)
+            self.sessies[sn] = nieuw
+            try:
+                await nieuw.verbind()
+            except OSError as err:
+                nieuw.meting.laatste_fout = f"verbinden: {err}"
+
+    def _cipher_voor(self, sn: str):
+        async def haal(cipher_id: int) -> str | None:
+            if cipher_id in self._ciphers:
+                return self._ciphers[cipher_id]
+            beheerder = str(((self.stations.get(sn) or {}).get("member") or {}).get("admin_user_id") or "")
+            sleutel = await self.cloud.cipher(cipher_id, beheerder or (self.cloud.sessie.user_id or ""))
+            if sleutel:
+                self._ciphers[cipher_id] = sleutel
+            return sleutel
+        return haal
+
+    def stop(self) -> None:
+        for s in self.sessies.values():
+            s.sluit()
 
     async def _eigen_broadcast(self) -> list[str]:
         """De broadcastadressen van de netwerkkaarten van Home Assistant."""
@@ -173,7 +216,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         ms = t["ms"]
         rondes = t["zoekrondes"] * max(1, len([s for s in self.stations.values() if s.get("p2p_did")]))
         return {
-            "stap": "1 - cloud-inventaris en lokaal vinden (alleen lezen)",
+            "stap": "2 - lokale versleutelde P2P-sessie (alleen lezen)",
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],
@@ -188,4 +231,5 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 sn: {**v, "naam": (self.stations.get(sn) or {}).get("station_name")}
                 for sn, v in self.lokaal.items()
             },
+            "p2p": {sn: s.samenvatting() for sn, s in self.sessies.items()},
         }

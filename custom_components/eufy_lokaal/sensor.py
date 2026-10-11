@@ -28,7 +28,7 @@ async def async_setup_entry(
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
     entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry)]
     for sn in c.stations:
-        entiteiten += [StationLokaalSensor(c, sn), StationFirmwareSensor(c, sn), StationIpSensor(c, sn)]
+        entiteiten += [StationLokaalSensor(c, sn), StationP2PSensor(c, sn), StationFirmwareSensor(c, sn), StationIpSensor(c, sn)]
     for sn, a in c.apparaten.items():
         if parameter(a, PARAM_BATTERIJ) is not None:
             entiteiten.append(ApparaatBatterijSensor(c, sn))
@@ -122,6 +122,35 @@ class StationLokaalSensor(_Station):
         l = dict(self.coordinator.lokaal.get(self._sn) or {})
         l["p2p_did_bekend"] = bool(self._s.get("p2p_did"))
         return l
+
+
+class StationP2PSensor(_Station):
+    """Stap 2: de lokale, versleutelde P2P-sessie met het station."""
+
+    _attr_name = "P2P"
+    _attr_icon = "mdi:lock-check-outline"
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c, sn, "p2p")
+
+    @property
+    def _sessie(self):
+        return self.coordinator.sessies.get(self._sn)
+
+    @property
+    def native_value(self) -> str:
+        s = self._sessie
+        if s is None:
+            return "wacht op lokaal vinden"
+        sv = s.samenvatting()
+        if not sv["verbonden"]:
+            return "niet verbonden"
+        return "verbonden, versleuteld" if s.meting.niveau else "verbonden"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        s = self._sessie
+        return s.samenvatting() if s is not None else {}
 
 
 class StationFirmwareSensor(_Station):
