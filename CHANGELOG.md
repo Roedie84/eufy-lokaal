@@ -1,5 +1,13 @@
 # Changelog — Eufy Lokaal
 
+## v0.3.0 — stap 3: lokale berichten en parameters (alleen lezen)
+
+- Na de sessiesleutel vraagt de integratie CMD_CAMERA_INFO (1103) op: alle parameters van HomeBase en apparaten, lokaal. Elke 10 minuten opnieuw. Verstuurde opdrachten worden herhaald tot de HomeBase ze bevestigt.
+- Berichten die de HomeBase uit zichzelf stuurt (alarmstand, vertraagd alarm, meldingen) gaan als gebeurtenis `eufy_lokaal_bericht` de bus op, met station en apparaat.
+- Nieuwe sensoren: per station **Alarmstand** en **Laatste melding**; per station en apparaat **Lokale parameters** (diagnose, niet in de recorder).
+- Batterij en wifi-signaal nemen de lokale waarde als die er is (attribuut `bron`).
+- Nog steeds niets dat iets verandert: alleen GATEWAYINFO en CAMERA_INFO gaan naar de HomeBase (broncodetoets).
+
 ## v0.2.4 — sessiesleutel: eerst niveau 1 ontsleutelen
 
 - Het GATEWAYINFO-antwoord op het CONTROL-kanaal is zelf met de sleutel van niveau 1 versleuteld; daarbinnen staan het cipher-id (op de HomeBase: 189) en het RSA-blok. Getoetst op een echt pakket van de HomeBase 3.

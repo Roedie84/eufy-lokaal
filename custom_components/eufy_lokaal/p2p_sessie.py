@@ -20,8 +20,16 @@ Verloop:
    (`f1 d1`) en ingelezen: 16 bytes kop ("XZYH", opdracht, lengte, kanaal,
    versleuteld, soort) en de inhoud, eventueel over meerdere pakketten.
 
-Wat deze stap NOOIT doet: een opdracht sturen die iets verandert. Alleen
-CHECK_CAM, PING/PONG, ACK en CMD_GATEWAYINFO. Een broncodetoets bewaakt dat.
+5. stap 3: is de sleutel er, dan vraagt de sessie CMD_CAMERA_INFO (1103,
+   alleen lezen: alle parameters van station en apparaten) en daarna elke
+   10 minuten opnieuw. Berichten die het station uit zichzelf stuurt
+   (alarmstand, meldingen) gaan via `bij_bericht` naar de coördinator.
+   Berichten op het CONTROL-kanaal zijn met niveau 1 versleuteld, antwoorden
+   op het DATA-kanaal met de sessiesleutel.
+
+Wat deze integratie (nog) NOOIT doet: een opdracht sturen die iets verandert.
+Alleen CHECK_CAM, PING/PONG, ACK, CMD_GATEWAYINFO en CMD_CAMERA_INFO. Een
+broncodetoets bewaakt dat.
 """
 from __future__ import annotations
 
@@ -59,6 +67,7 @@ KOP = 16
 KANAAL_STATION = 255
 
 CMD_GATEWAYINFO = 1100
+CMD_CAMERA_INFO = 1103
 CMD_PING = 1139
 
 HARTSLAG_S = 5.0
@@ -66,6 +75,13 @@ MAX_ZONDER_PONG_S = 30.0
 VERBIND_TIMEOUT_S = 10.0
 
 TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})
+TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})
+# Opdrachten die het station versleuteld verwacht (deel van de lijst van
+# eufy-security-client; alleen wat deze integratie stuurt).
+VERSLEUTELDE_OPDRACHTEN = frozenset({CMD_CAMERA_INFO})
+CAMERA_INFO_ELKE_S = 600.0
+OPNIEUW_NA_S = 1.0
+MAX_OPNIEUW = 4
 
 
 # --- zuiver: pakketten ---------------------------------------------------------
@@ -85,6 +101,28 @@ def opdracht_zonder_data(volgnr: int, opdracht: int, kanaal: int = KANAAL_STATIO
         raise ValueError(f"opdracht {opdracht} is in deze stap niet toegestaan")
     kop = bytes([0xD1, SOORT_DATA]) + struct.pack(">H", volgnr) + MAGIC + struct.pack("<H", opdracht)
     inhoud = b"\x00\x00" + b"\x00\x00" + b"\x01\x00" + bytes([kanaal, 0]) + b"\x00\x00"
+    return bericht(DATA, kop + inhoud)
+
+
+def aes_ecb_versleutel(sleutel: bytes, data: bytes) -> bytes:
+    e = Cipher(algorithms.AES(sleutel), modes.ECB()).encryptor()
+    return e.update(data) + e.finalize()
+
+
+def opdracht_met_getal(volgnr: int, opdracht: int, waarde: int, sleutel: bytes | None = None,
+                       niveau: int = 0, kanaal: int = KANAAL_STATION) -> bytes:
+    """Een DATA-pakket met een opdracht en een getal (CMD_CAMERA_INFO met 255).
+    Met sleutel en niveau > 0 wordt de inhoud (opgevuld tot 16 bytes)
+    versleuteld en staat het niveau in de kop."""
+    if opdracht not in TOEGESTANE_OPDRACHTEN_MET_GETAL:
+        raise ValueError(f"opdracht {opdracht} is in deze stap niet toegestaan")
+    data = struct.pack("<I", waarde)
+    versleuteld = opdracht in VERSLEUTELDE_OPDRACHTEN and niveau > 0 and sleutel is not None and len(sleutel) == 16
+    if versleuteld:
+        data = aes_ecb_versleutel(sleutel, data.ljust(16, b"\x00"))
+    kop = bytes([0xD1, SOORT_DATA]) + struct.pack(">H", volgnr) + MAGIC + struct.pack("<H", opdracht)
+    inhoud = (struct.pack("<H", len(data)) + b"\x00\x00" + b"\x01\x00"
+              + bytes([kanaal & 0xFF, niveau if versleuteld else 0]) + b"\x00\x00" + data)
     return bericht(DATA, kop + inhoud)
 
 
@@ -270,6 +308,7 @@ class P2PSessie:
         poort: int,
         haal_cipher: Callable[[int], Awaitable[str | None]] | None = None,
         meting: Meting | None = None,
+        bij_bericht: Callable[[dict], None] | None = None,
     ) -> None:
         self.station_sn, self.did, self.ip, self.poort = station_sn, did, ip, poort
         self._haal_cipher = haal_cipher
@@ -285,6 +324,9 @@ class P2PSessie:
         self._verbonden = asyncio.Event()
         self._taken: list[asyncio.Task] = []
         self._sleutel_bezig = False
+        self._bij_bericht = bij_bericht
+        self._open: dict[int, tuple[bytes, int, float]] = {}  # volgnr -> (pakket, pogingen, tijd)
+        self._camera_info_t = 0.0
 
     def _stuur(self, data: bytes, adres) -> None:
         if self._transport is None:
@@ -344,12 +386,45 @@ class P2PSessie:
             self._ping_t = time.monotonic()
             self.meting.pings += 1
             self._stuur(bericht(PING), self._adres)
+            if self.sleutel is not None and time.monotonic() - self._camera_info_t > CAMERA_INFO_ELKE_S:
+                self.vraag_camera_info()
 
     def _stuur_opdracht(self, opdracht: int) -> None:
         if self._transport is None or self._adres is None:
             return
-        self._stuur(opdracht_zonder_data(self._volgnr, opdracht), self._adres)
+        self._verstuur_data(opdracht_zonder_data(self._volgnr, opdracht))
+
+    def vraag_camera_info(self) -> None:
+        """Stap 3: alle parameters van station en apparaten opvragen (lezen)."""
+        if self._transport is None or self._adres is None:
+            return
+        self._camera_info_t = time.monotonic()
+        self._verstuur_data(opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO, KANAAL_STATION,
+                                               self.sleutel, self.meting.niveau))
+
+    def _verstuur_data(self, pakket: bytes) -> None:
+        """Verstuur en houd vast tot het station het bevestigt (ACK)."""
+        volgnr = self._volgnr
         self._volgnr = (self._volgnr + 1) % 0x10000
+        self._open[volgnr] = (pakket, 0, time.monotonic())
+        self._stuur(pakket, self._adres)
+        try:
+            asyncio.get_running_loop().call_later(OPNIEUW_NA_S, self._opnieuw, volgnr)
+        except RuntimeError:
+            pass
+
+    def _opnieuw(self, volgnr: int) -> None:
+        open_ = self._open.get(volgnr)
+        if open_ is None or self._transport is None or self._adres is None:
+            return
+        pakket, pogingen, _ = open_
+        if pogingen >= MAX_OPNIEUW:
+            self._open.pop(volgnr, None)
+            self.meting.laatste_fout = f"geen ACK op pakket {volgnr}"
+            return
+        self._open[volgnr] = (pakket, pogingen + 1, time.monotonic())
+        self._stuur(pakket, self._adres)
+        asyncio.get_running_loop().call_later(OPNIEUW_NA_S, self._opnieuw, volgnr)
 
     # ontvangen ---------------------------------------------------------------------
 
@@ -372,6 +447,11 @@ class P2PSessie:
             if self._ping_t is not None:
                 self.meting.rtt_ms.append(round((time.monotonic() - self._ping_t) * 1000, 1))
                 del self.meting.rtt_ms[:-100]
+        elif soort == ACK and len(data) >= 10 and data[5] == SOORT_DATA:
+            aantal = struct.unpack(">H", data[6:8])[0]
+            for i in range(min(aantal, 17)):
+                if len(data) >= 10 + 2 * i:
+                    self._open.pop(struct.unpack(">H", data[8 + 2 * i:10 + 2 * i])[0], None)
         elif soort == END:
             self.meting.uitval += 1
             self.meting.verbonden = False
@@ -397,9 +477,9 @@ class P2PSessie:
         self.meting.data_pakket(
             data, f"{len(klaar)} bericht(en)" if klaar else ("deel" if bouwer.kop else "geen XZYH-kop"))
         for kop, inhoud in klaar:
-            self._bericht(kop, inhoud)
+            self._bericht(kop, inhoud, soort)
 
-    def _bericht(self, kop: DataKop, inhoud: bytes) -> None:
+    def _bericht(self, kop: DataKop, inhoud: bytes, soort: int = SOORT_DATA) -> None:
         resultaat = kop.soort == 1
         if kop.opdracht == CMD_GATEWAYINFO:
             # Met signCode > 0 is het antwoord versleuteld met de sleutel van
@@ -412,12 +492,22 @@ class P2PSessie:
                 self._sleutel_bezig = True
                 asyncio.get_running_loop().create_task(self._zet_sleutel(gatewayinfo_kandidaten(inhoud)))
             return
-        if kop.versleuteld and self.sleutel and inhoud and len(inhoud) % 16 == 0:
-            try:
-                inhoud = aes_ecb_ontsleutel(self.sleutel, inhoud)
-            except Exception:  # noqa: BLE001
-                pass
+        if kop.versleuteld and inhoud and len(inhoud) % 16 == 0:
+            # CONTROL: altijd niveau 1 (zoals eufy-security-client); DATA: de sessiesleutel.
+            sleutel = niveau1_sleutel(self.station_sn, self.did) if soort == SOORT_CONTROL else self.sleutel
+            if sleutel:
+                try:
+                    inhoud = aes_ecb_ontsleutel(sleutel, inhoud)
+                except Exception:  # noqa: BLE001
+                    pass
         self.meting.noteer(kop, len(inhoud), resultaat)
+        if self._bij_bericht is not None:
+            from .berichten import ontleed
+
+            try:
+                self._bij_bericht(ontleed(kop.opdracht, inhoud, resultaat, kop.kanaal))
+            except Exception as err:  # noqa: BLE001
+                self.meting.laatste_fout = f"bericht {kop.opdracht}: {type(err).__name__}: {err}"
 
     async def _zet_sleutel(self, kandidaten: list[tuple[int, bytes]]) -> None:
         try:
@@ -435,7 +525,8 @@ class P2PSessie:
                 try:
                     sleutel = rsa_sessiesleutel(prive, versleuteld)
                 except Exception as err:  # noqa: BLE001
-                    self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: RSA {type(err).__name__}")
+                    self.meting.sleutel_pogingen.append(
+                        f"cipher {cipher_id}: RSA {type(err).__name__}: {err} ({len(versleuteld)} bytes)")
                     continue
                 self.meting.sleutel_pogingen.append(f"cipher {cipher_id}: sleutel {len(sleutel)} bytes")
                 if len(sleutel) == 16:
@@ -446,6 +537,8 @@ class P2PSessie:
         finally:
             del self.meting.sleutel_pogingen[:-8]
             self._sleutel_bezig = False
+            if self.sleutel is not None:
+                self.vraag_camera_info()
 
     # weergave ----------------------------------------------------------------------
 

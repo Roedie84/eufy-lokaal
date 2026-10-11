@@ -92,6 +92,21 @@ def test_sessie_tegen_een_nep_station():
                     self.t.sendto(ps.ack(0, volgnr), adres)
                     kop = ps.lees_kop(data[8:])
                     self.opdrachten.append(kop.opdracht)
+                    if kop.opdracht == ps.CMD_CAMERA_INFO:
+                        self.camera_info_inhoud = data[8 + 16:]
+                        self.camera_info_kop = data[8:8 + 16]
+                        import json as _j
+                        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                        js = _j.dumps({"params": [{"dev_type": 255, "param_type": 1151, "param_value": "1"},
+                                                  {"dev_type": 0, "param_type": 1101, "param_value": "87"}],
+                                       "main_sw_version": "3.8.5.2"}).encode() + b"\x00"
+                        js = js.ljust((len(js) + 15) // 16 * 16, b"\x00")
+                        e = Cipher(algorithms.AES(ps.niveau1_sleutel("T8030T2325281762", DID)), modes.ECB()).encryptor()
+                        inh = e.update(js) + e.finalize()
+                        antw = (ps.MAGIC + struct.pack("<H", 1103) + struct.pack("<I", len(inh))
+                                + b"\x00\x00" + bytes([255, 1, 0, 0]) + inh)
+                        self.t.sendto(bericht(ps.DATA, b"\xd1\x02" + struct.pack(">H", 1) + antw), adres)
+                        return
                     # zoals de HomeBase 3: CONTROL-kanaal, signCode 1, inhoud met
                     # niveau 1 versleuteld, geen returncode, opgevuld tot 144.
                     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -111,26 +126,38 @@ def test_sessie_tegen_een_nep_station():
             assert cipher_id == 3
             return NODE["pem"]
 
-        s = ps.P2PSessie("T8030T2325281762", DID, "127.0.0.1", poort, haal)
+        ontvangen = []
+        s = ps.P2PSessie("T8030T2325281762", DID, "127.0.0.1", poort, haal, None, ontvangen.append)
         try:
             assert await s.verbind()
-            await asyncio.sleep(0.3)
-            return s, station
+            await asyncio.sleep(0.4)
+            return s, station, ontvangen
         finally:
             s.sluit()
             t.close()
 
-    s, station = asyncio.run(_proef())
-    assert station.opdrachten == [1100]
+    s, station, ontvangen = asyncio.run(_proef())
+    assert station.opdrachten == [1100, 1103]
     assert s.meting.verbindingen == 1 and s.meting.niveau == 2 and s.sleutel == b"0123456789abcdef"
-    assert s.meting.per_opdracht == {"1100": 1}
+    assert s.meting.per_opdracht == {"1100": 1, "1103": 1}
+    # stap 3: CMD_CAMERA_INFO gaat versleuteld (niveau 2) met 255 als getal
+    assert station.camera_info_kop[12:14] == bytes([255, 2])
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    d = Cipher(algorithms.AES(b"0123456789abcdef"), modes.ECB()).decryptor()
+    assert (d.update(station.camera_info_inhoud) + d.finalize())[:4] == struct.pack("<I", 255)
+    info = [o for o in ontvangen if o["naam"] == "camera_info"][0]
+    assert info["parameters"] == {255: {1151: "1"}, 0: {1101: "87"}}
+    assert not s._open  # alles bevestigd
 
 
 def test_stuurt_niets_dat_iets_verandert():
     code = (MAP / "p2p_sessie.py").read_text()
     code = re.sub(r'"""[\s\S]*?"""', "", code)
     assert "TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})" in code
+    assert "TOEGESTANE_OPDRACHTEN_MET_GETAL = frozenset({CMD_CAMERA_INFO})" in code
     assert code.count("self._stuur_opdracht(") == 1
+    assert code.count("opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO") == 1
+    assert code.count("self._verstuur_data(") == 2
 
 
 def test_v021_pakketten_tellen_en_meting_loopt_door():

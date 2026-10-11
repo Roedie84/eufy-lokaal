@@ -17,6 +17,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .berichten import ALARMSTANDEN
 from .cloud import PARAM_BATTERIJ, PARAM_WIFI_RSSI, parameter
 from .const import DOMAIN
 from .coordinator import EufyLokaalCoordinator
@@ -28,8 +29,12 @@ async def async_setup_entry(
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
     entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry)]
     for sn in c.stations:
-        entiteiten += [StationLokaalSensor(c, sn), StationP2PSensor(c, sn), StationFirmwareSensor(c, sn), StationIpSensor(c, sn)]
+        entiteiten += [StationLokaalSensor(c, sn), StationP2PSensor(c, sn), StationFirmwareSensor(c, sn),
+                       StationIpSensor(c, sn), StationAlarmstandSensor(c, sn), StationMeldingSensor(c, sn),
+                       ParametersSensor(c, sn, station=True)]
     for sn, a in c.apparaten.items():
+        if sn not in c.stations:
+            entiteiten.append(ParametersSensor(c, sn, station=False))
         if parameter(a, PARAM_BATTERIJ) is not None:
             entiteiten.append(ApparaatBatterijSensor(c, sn))
         if parameter(a, PARAM_WIFI_RSSI) is not None:
@@ -153,6 +158,72 @@ class StationP2PSensor(_Station):
         return s.samenvatting() if s is not None else {}
 
 
+class StationAlarmstandSensor(_Station):
+    """Stap 3: de alarmstand zoals de HomeBase die lokaal meldt."""
+
+    _attr_name = "Alarmstand"
+    _attr_icon = "mdi:shield-home"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = sorted(set(ALARMSTANDEN.values()))
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c, sn, "alarmstand")
+
+    @property
+    def native_value(self) -> str | None:
+        naam = (self.coordinator.alarmstand.get(self._sn) or {}).get("naam")
+        return naam if naam in self._attr_options else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        a = dict(self.coordinator.alarmstand.get(self._sn) or {})
+        a["bewakingsstand"] = self.coordinator.bewakingsstand(self._sn)
+        return a
+
+
+class StationMeldingSensor(_Station):
+    """Stap 3: het laatste bericht dat de HomeBase uit zichzelf stuurde.
+    Elk bericht gaat ook als gebeurtenis `eufy_lokaal_bericht` de bus op."""
+
+    _attr_name = "Laatste melding"
+    _attr_icon = "mdi:message-badge-outline"
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c, sn, "melding")
+
+    @property
+    def native_value(self) -> str | None:
+        m = self.coordinator.laatste_melding.get(self._sn)
+        return m.get("naam") if m else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return dict(self.coordinator.laatste_melding.get(self._sn) or {})
+
+
+class ParametersSensor(_Basis):
+    """Stap 3: alle parameters die de HomeBase lokaal over dit apparaat geeft."""
+
+    _attr_name = "Lokale parameters"
+    _attr_icon = "mdi:format-list-numbered"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _unrecorded_attributes = frozenset({"parameters"})
+
+    def __init__(self, c, sn, station: bool) -> None:
+        super().__init__(c)
+        self._sn = sn
+        self._attr_unique_id = f"{sn}_parameters"
+        self._attr_device_info = _station_info(c, sn) if station else _apparaat_info(c, sn)
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.lokale_parameters(self._sn))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"parameters": {str(k): v for k, v in sorted(self.coordinator.lokale_parameters(self._sn).items())}}
+
+
 class StationFirmwareSensor(_Station):
     _attr_name = "Firmware"
     _attr_icon = "mdi:chip"
@@ -209,8 +280,11 @@ class ApparaatBatterijSensor(_Apparaat):
 
     @property
     def native_value(self) -> int | None:
-        w = parameter(self._a, PARAM_BATTERIJ)
-        return w if isinstance(w, int) else None
+        return _lokaal_of_cloud(self, PARAM_BATTERIJ)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"bron": _bron(self, PARAM_BATTERIJ)}
 
 
 class ApparaatWifiSensor(_Apparaat):
@@ -225,5 +299,29 @@ class ApparaatWifiSensor(_Apparaat):
 
     @property
     def native_value(self) -> int | None:
-        w = parameter(self._a, PARAM_WIFI_RSSI)
-        return w if isinstance(w, int) else None
+        return _lokaal_of_cloud(self, PARAM_WIFI_RSSI)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"bron": _bron(self, PARAM_WIFI_RSSI)}
+
+
+def _lokaal_getal(e: _Apparaat, param: int) -> int | None:
+    w = e.coordinator.lokale_parameters(e._sn).get(param)
+    try:
+        return int(w) if w is not None else None
+    except ValueError:
+        return None
+
+
+def _lokaal_of_cloud(e: _Apparaat, param: int) -> int | None:
+    """Stap 3: de lokale waarde als de HomeBase die gaf, anders de cloud."""
+    w = _lokaal_getal(e, param)
+    if w is not None:
+        return w
+    w = parameter(e._a, param)
+    return w if isinstance(w, int) else None
+
+
+def _bron(e: _Apparaat, param: int) -> str:
+    return "lokaal" if _lokaal_getal(e, param) is not None else "cloud"

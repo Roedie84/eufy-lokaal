@@ -16,6 +16,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import p2p
+from .berichten import KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND, alarmstand_naam
 from .p2p_sessie import P2PSessie
 from .cloud import PARAM_LAN_IP, CaptchaNodig, CloudFout, EMailCodeNodig, EufyCloud, Sessie, parameter
 from .const import (
@@ -92,6 +93,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self._laatste_adressen: list[str] = []
         self.sessies: dict[str, P2PSessie] = {}
         self._ciphers: dict[int, str] = {}
+        # stap 3: wat de HomeBase lokaal vertelt
+        self.lokale_params: dict[str, dict[int, dict[int, str]]] = {}
+        self.alarmstand: dict[str, dict] = {}
+        self.laatste_melding: dict[str, dict] = {}
+        self.berichten_per_soort: dict[str, int] = {}
 
     # cloud ----------------------------------------------------------------------
 
@@ -180,12 +186,66 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 s.sluit()
             station = self.stations.get(sn) or {}
             # v0.2.1: één meting over alle pogingen heen (tellers lopen door).
-            nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn), meting)
+            nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn), meting,
+                              self._bij_bericht_voor(sn))
             self.sessies[sn] = nieuw
             try:
                 await nieuw.verbind()
             except OSError as err:
                 nieuw.meting.laatste_fout = f"verbinden: {err}"
+
+    # stap 3: berichten ------------------------------------------------------------------
+
+    def apparaat_bij_kanaal(self, station_sn: str, kanaal: int) -> str | None:
+        """Het serienummer bij een kanaal van een station (255/1000 = het station zelf)."""
+        if kanaal in (KANAAL_STATION, KANAAL_BINNEN):
+            return station_sn
+        for sn, a in self.apparaten.items():
+            if a.get("station_sn") == station_sn and a.get("device_channel") == kanaal:
+                return sn
+        return None
+
+    def lokale_parameters(self, sn: str) -> dict[int, str]:
+        """Lokale parameters (uit CMD_CAMERA_INFO) van een station of apparaat."""
+        if sn in self.stations:
+            return (self.lokale_params.get(sn) or {}).get(KANAAL_STATION) or {}
+        a = self.apparaten.get(sn) or {}
+        kanaal = a.get("device_channel")
+        if kanaal is None:
+            return {}
+        return (self.lokale_params.get(a.get("station_sn") or "") or {}).get(int(kanaal)) or {}
+
+    def _bij_bericht_voor(self, station_sn: str):
+        def bij_bericht(b: dict) -> None:
+            soort = b.get("soort", "onbekend")
+            self.berichten_per_soort[soort] = self.berichten_per_soort.get(soort, 0) + 1
+            nu = time.time()
+            if soort == "camera_info":
+                self.lokale_params[station_sn] = b.get("parameters") or {}
+                stand = (self.lokale_params[station_sn].get(KANAAL_STATION) or {}).get(PARAM_ALARMSTAND)
+                if stand is not None and alarmstand_naam(stand):
+                    vorig = self.alarmstand.get(station_sn) or {}
+                    if vorig.get("naam") != alarmstand_naam(stand):
+                        self.alarmstand[station_sn] = {"waarde": int(stand), "naam": alarmstand_naam(stand),
+                                                       "bron": "camera_info", "sinds": nu}
+                    else:
+                        vorig["bevestigd"] = nu
+            elif soort == "alarmstand":
+                self.alarmstand[station_sn] = {"waarde": b["waarde"], "naam": b["alarmstand"],
+                                               "bron": "melding station", "sinds": nu}
+            if soort in ("ping", "antwoord", "camera_info"):
+                self.async_update_listeners()
+                return
+            apparaat = self.apparaat_bij_kanaal(station_sn, int(b.get("kanaal", KANAAL_STATION)))
+            gebeurtenis = {**b, "station_sn": station_sn, "apparaat_sn": apparaat, "tijd": nu}
+            self.laatste_melding[station_sn] = gebeurtenis
+            self.hass.bus.async_fire(f"{DOMAIN}_bericht", gebeurtenis)
+            self.async_update_listeners()
+        return bij_bericht
+
+    def bewakingsstand(self, station_sn: str) -> str | None:
+        w = self.lokale_parameters(station_sn).get(PARAM_BEWAKINGSSTAND)
+        return alarmstand_naam(w) if w is not None else None
 
     def _cipher_voor(self, sn: str):
         async def haal(cipher_id: int) -> str | None:
@@ -217,7 +277,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         ms = t["ms"]
         rondes = t["zoekrondes"] * max(1, len([s for s in self.stations.values() if s.get("p2p_did")]))
         return {
-            "stap": "2 - lokale versleutelde P2P-sessie (alleen lezen)",
+            "stap": "3 - lokale berichten en parameters (alleen lezen)",
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],
@@ -233,4 +293,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 for sn, v in self.lokaal.items()
             },
             "p2p": {sn: s.samenvatting() for sn, s in self.sessies.items()},
+            "berichten_per_soort": self.berichten_per_soort,
+            "lokale_parameters": {sn: {str(k): len(v) for k, v in kanalen.items()}
+                                  for sn, kanalen in self.lokale_params.items()},
+            "alarmstand": self.alarmstand,
         }
