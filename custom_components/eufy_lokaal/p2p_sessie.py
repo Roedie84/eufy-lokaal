@@ -62,7 +62,7 @@ CMD_GATEWAYINFO = 1100
 CMD_PING = 1139
 
 HARTSLAG_S = 5.0
-MAX_ZONDER_PONG_S = 20.0
+MAX_ZONDER_PONG_S = 30.0
 VERBIND_TIMEOUT_S = 10.0
 
 TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})
@@ -187,6 +187,24 @@ class Meting:
     per_opdracht: dict = field(default_factory=dict)
     laatste: list = field(default_factory=list)
     laatste_fout: str | None = None
+    # v0.2.1: elk pakket per soort, in en uit, en de laatste koppen - om te
+    # zien wat het station wel en niet beantwoordt.
+    ontvangen: dict = field(default_factory=dict)
+    verzonden: dict = field(default_factory=dict)
+    laatste_pakketten: list = field(default_factory=list)
+    laatst_iets_ontvangen: float | None = None
+
+    def pakket(self, richting: str, data: bytes) -> None:
+        soort = data[:2].hex()
+        teller = self.ontvangen if richting == "in" else self.verzonden
+        teller[soort] = teller.get(soort, 0) + 1
+        if richting == "in":
+            self.laatst_iets_ontvangen = time.time()
+        self.laatste_pakketten.append(
+            {"t": round(time.time(), 1), "r": richting, "soort": soort, "lengte": len(data),
+             "begin": data[:16].hex()}
+        )
+        del self.laatste_pakketten[:-16]
 
     def noteer(self, kop: DataKop, lengte: int, resultaat: bool) -> None:
         self.berichten += 1
@@ -220,10 +238,11 @@ class P2PSessie:
         ip: str,
         poort: int,
         haal_cipher: Callable[[int], Awaitable[str | None]] | None = None,
+        meting: Meting | None = None,
     ) -> None:
         self.station_sn, self.did, self.ip, self.poort = station_sn, did, ip, poort
         self._haal_cipher = haal_cipher
-        self.meting = Meting()
+        self.meting = meting or Meting()
         self.sleutel: bytes | None = None
         self._transport = None
         self._adres: tuple | None = None
@@ -235,6 +254,12 @@ class P2PSessie:
         self._verbonden = asyncio.Event()
         self._taken: list[asyncio.Task] = []
 
+    def _stuur(self, data: bytes, adres) -> None:
+        if self._transport is None:
+            return
+        self.meting.pakket("uit", data)
+        self._transport.sendto(data, adres)
+
     # levenscyclus -------------------------------------------------------------------
 
     async def verbind(self) -> bool:
@@ -245,7 +270,7 @@ class P2PSessie:
         vraag = check_cam(self.did)
         for p in [self.poort, *range(self.poort - 3, self.poort), *range(self.poort + 1, self.poort + 4)]:
             if 0 < p < 65536:
-                self._transport.sendto(vraag, (self.ip, p))
+                self._stuur(vraag, (self.ip, p))
         try:
             await asyncio.wait_for(self._verbonden.wait(), VERBIND_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -263,7 +288,7 @@ class P2PSessie:
         if self._transport is not None:
             try:
                 if self._adres and self.meting.verbonden:
-                    self._transport.sendto(bericht(END), self._adres)
+                    self._stuur(bericht(END), self._adres)
             except OSError:
                 pass
             self._transport.close()
@@ -275,7 +300,8 @@ class P2PSessie:
     def levend(self) -> bool:
         if not self.meting.verbonden:
             return False
-        laatst = self._laatste_pong or self.meting.verbonden_sinds or 0
+        laatst = max(self._laatste_pong or 0, self.meting.laatst_iets_ontvangen or 0,
+                     self.meting.verbonden_sinds or 0)
         return time.time() - laatst < MAX_ZONDER_PONG_S
 
     async def _hartslag(self) -> None:
@@ -285,17 +311,18 @@ class P2PSessie:
                 return
             self._ping_t = time.monotonic()
             self.meting.pings += 1
-            self._transport.sendto(bericht(PING), self._adres)
+            self._stuur(bericht(PING), self._adres)
 
     def _stuur_opdracht(self, opdracht: int) -> None:
         if self._transport is None or self._adres is None:
             return
-        self._transport.sendto(opdracht_zonder_data(self._volgnr, opdracht), self._adres)
+        self._stuur(opdracht_zonder_data(self._volgnr, opdracht), self._adres)
         self._volgnr = (self._volgnr + 1) % 0x10000
 
     # ontvangen ---------------------------------------------------------------------
 
     def ontvang(self, data: bytes, adres) -> None:
+        self.meting.pakket("in", data)
         soort = data[:2]
         if soort == CAM_ID:
             if not self.meting.verbonden:
@@ -306,7 +333,7 @@ class P2PSessie:
                 self._verbonden.set()
         elif soort == PING:
             if self._transport is not None:
-                self._transport.sendto(bericht(PONG), adres)
+                self._stuur(bericht(PONG), adres)
         elif soort == PONG:
             self._laatste_pong = time.time()
             self.meting.pongs += 1
@@ -323,7 +350,7 @@ class P2PSessie:
         soort = data[5]
         volgnr = struct.unpack(">H", data[6:8])[0]
         if self._transport is not None:
-            self._transport.sendto(ack(soort, volgnr), adres)
+            self._stuur(ack(soort, volgnr), adres)
         verwacht = self._verwacht.get(soort)
         if verwacht is not None and volgnr != verwacht:
             if (volgnr - verwacht) % 0x10000 > 0x8000:
@@ -380,4 +407,7 @@ class P2PSessie:
             "per_opdracht": m.per_opdracht,
             "laatste_berichten": m.laatste[-8:],
             "laatste_fout": m.laatste_fout,
+            "pakketten_in": m.ontvangen,
+            "pakketten_uit": m.verzonden,
+            "laatste_pakketten": m.laatste_pakketten[-10:],
         }

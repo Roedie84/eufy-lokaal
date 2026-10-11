@@ -111,3 +111,19 @@ def test_stuurt_niets_dat_iets_verandert():
     code = re.sub(r'"""[\s\S]*?"""', "", code)
     assert "TOEGESTANE_OPDRACHTEN = frozenset({CMD_GATEWAYINFO})" in code
     assert code.count("self._stuur_opdracht(") == 1
+
+
+def test_v021_pakketten_tellen_en_meting_loopt_door():
+    from custom_components.eufy_lokaal.p2p_sessie import Meting, P2PSessie
+
+    m = Meting()
+    s = P2PSessie("T8010P000", "EUPRAKM-012345-ABCDE", "192.168.2.9", 32108, None, m)
+    s.ontvang(b"\xf1\x42\x00\x00", ("192.168.2.9", 32108))
+    s.ontvang(b"\xf1\xe1\x00\x00", ("192.168.2.9", 32108))
+    assert m.ontvangen == {"f142": 1, "f1e1": 1}
+    assert m.verbindingen == 1 and m.pongs == 1
+    assert s.levend
+    s2 = P2PSessie("T8010P000", "EUPRAKM-012345-ABCDE", "192.168.2.9", 32108, None, m)
+    assert s2.meting is m and m.ontvangen["f142"] == 1
+    sv = s.samenvatting()
+    assert sv["laatste_pakketten"][-1]["soort"] == "f1e1"

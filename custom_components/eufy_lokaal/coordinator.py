@@ -172,14 +172,14 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             s = self.sessies.get(sn)
             if s is not None and s.levend and (s.ip, s.poort) == (l["ip"], l["poort"]):
                 continue
-            vorige = s.meting if s is not None else None
+            meting = s.meting if s is not None else None
             if s is not None:
+                if meting.verbonden:
+                    meting.uitval += 1
                 s.sluit()
             station = self.stations.get(sn) or {}
-            nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn))
-            if vorige is not None:
-                nieuw.meting.verbindingen = vorige.verbindingen
-                nieuw.meting.uitval = vorige.uitval + (1 if vorige.verbonden else 0)
+            # v0.2.1: één meting over alle pogingen heen (tellers lopen door).
+            nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn), meting)
             self.sessies[sn] = nieuw
             try:
                 await nieuw.verbind()

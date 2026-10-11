@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.2.1 — P2P-diagnose
+
+- Elk P2P-pakket wordt geteld per soort, in en uit (`pakketten_in`, `pakketten_uit`), met de koppen van de laatste pakketten (`laatste_pakketten`).
+- De meting loopt door over herverbindingen; `uitval` telt nu correct.
+- Een sessie geldt als levend zolang er binnen 30 s iets binnenkomt (niet alleen PONG).
+
 ## v0.2.0 — stap 2: een lokale, versleutelde P2P-sessie met de HomeBase
 
 Stap 1 vond de HomeBase lokaal (192.168.2.52, ~20 ms). Nu een eigen sessie:
