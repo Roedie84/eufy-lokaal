@@ -600,8 +600,12 @@ ENGELS = {
 }
 
 
+# Al een eigen entiteit (Batterij, Wifi-signaal, Alarmstand, Bewakingsstand, IP-adres): niet dubbel.
+DUBBEL = frozenset({1101, 1142, 1151, 1224, 1176})
+
+
 def bekend(nummer: int) -> bool:
-    return nummer in NEDERLANDS or nummer in ENGELS
+    return nummer not in DUBBEL and (nummer in NEDERLANDS or nummer in ENGELS)
 
 
 def parameternaam(nummer: int) -> str:

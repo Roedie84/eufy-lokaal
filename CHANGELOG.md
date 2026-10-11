@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.5 — geen dubbele parameters
+
+- Parameters die al een eigen entiteit hebben (batterij, wifi-signaal, alarmstand, bewakingsstand, LAN-IP) worden geen extra parameter-entiteit meer; bestaande worden opgeruimd.
+
 ## v0.7.4 — alleen parameters met een naam
 
 - Parameters zonder bekende naam ("Parameter <nummer>") worden geen entiteit meer; bestaande worden bij het opstarten uit het entiteitenregister verwijderd.
