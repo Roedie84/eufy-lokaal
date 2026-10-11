@@ -193,6 +193,15 @@ class Meting:
     verzonden: dict = field(default_factory=dict)
     laatste_pakketten: list = field(default_factory=list)
     laatst_iets_ontvangen: float | None = None
+    # v0.2.2: de inhoud van DATA-pakketten en van elke soort het eerste
+    # exemplaar, om het formaat van deze firmware te zien.
+    laatste_data: list = field(default_factory=list)
+    voorbeelden: dict = field(default_factory=dict)
+
+    def data_pakket(self, data: bytes, oordeel: str) -> None:
+        self.laatste_data.append({"t": round(time.time(), 1), "lengte": len(data),
+                                  "oordeel": oordeel, "inhoud": data[:72].hex()})
+        del self.laatste_data[:-12]
 
     def pakket(self, richting: str, data: bytes) -> None:
         soort = data[:2].hex()
@@ -200,6 +209,7 @@ class Meting:
         teller[soort] = teller.get(soort, 0) + 1
         if richting == "in":
             self.laatst_iets_ontvangen = time.time()
+            self.voorbeelden.setdefault(soort, data[:96].hex())
         self.laatste_pakketten.append(
             {"t": round(time.time(), 1), "r": richting, "soort": soort, "lengte": len(data),
              "begin": data[:16].hex()}
@@ -354,12 +364,17 @@ class P2PSessie:
         verwacht = self._verwacht.get(soort)
         if verwacht is not None and volgnr != verwacht:
             if (volgnr - verwacht) % 0x10000 > 0x8000:
+                self.meting.data_pakket(data, "dubbel")
                 return  # dubbel (al gehad)
         self._verwacht[soort] = (volgnr + 1) % 0x10000
         if soort != SOORT_DATA:
+            self.meting.data_pakket(data, f"soort {soort} overgeslagen")
             return  # video/bestanden: pas in latere stappen
         bouwer = self._bouwer.setdefault(soort, Bouwer())
-        for kop, inhoud in bouwer.voeg_toe(data[8:]):
+        klaar = bouwer.voeg_toe(data[8:])
+        self.meting.data_pakket(
+            data, f"{len(klaar)} bericht(en)" if klaar else ("deel" if bouwer.kop else "geen XZYH-kop"))
+        for kop, inhoud in klaar:
             self._bericht(kop, inhoud)
 
     def _bericht(self, kop: DataKop, inhoud: bytes) -> None:
@@ -409,5 +424,7 @@ class P2PSessie:
             "laatste_fout": m.laatste_fout,
             "pakketten_in": m.ontvangen,
             "pakketten_uit": m.verzonden,
-            "laatste_pakketten": m.laatste_pakketten[-10:],
+            "laatste_pakketten": m.laatste_pakketten[-6:],
+            "laatste_data": m.laatste_data[-8:],
+            "voorbeelden": m.voorbeelden,
         }

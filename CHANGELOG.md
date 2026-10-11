@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.2.2 — sessie blijft staan, DATA-inhoud zichtbaar
+
+- Niet meer elke minuut opnieuw verbinden: de poort in het zoekantwoord wisselt per ronde, alleen het IP telt nog.
+- `laatste_data`: inhoud van binnenkomende DATA-pakketten met wat ermee gebeurde; `voorbeelden`: het eerste pakket van elke soort.
+
 ## v0.2.1 — P2P-diagnose
 
 - Elk P2P-pakket wordt geteld per soort, in en uit (`pakketten_in`, `pakketten_uit`), met de koppen van de laatste pakketten (`laatste_pakketten`).

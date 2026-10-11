@@ -170,7 +170,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if not l.get("gevonden"):
                 continue
             s = self.sessies.get(sn)
-            if s is not None and s.levend and (s.ip, s.poort) == (l["ip"], l["poort"]):
+            # Alleen het IP telt: de poort in het zoekantwoord wisselt per ronde.
+            if s is not None and s.levend and s.ip == l["ip"]:
                 continue
             meting = s.meting if s is not None else None
             if s is not None:
