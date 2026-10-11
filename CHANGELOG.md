@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.1 — live momentopname bij aanbellen
+
+- Bij aanbellen haalt de integratie meteen een **live beeld** op: livestream kort starten, het eerste keyframe naar JPEG (PyAV + Pillow), stream direct weer stoppen. Te zien als **Live momentopname** (image-entiteit) en als gebeurtenis `eufy_lokaal_momentopname`.
+- Dienst `eufy_lokaal.momentopname` (doel: een camera) voor hetzelfde op elk moment.
+
 ## v0.7.0 — geluid, aanbellen en detecties, alle parameters als entiteiten
 
 - **Geluid** in de livestream: AAC (ADTS) van de HomeBase gaat mee in de MPEG-TS.

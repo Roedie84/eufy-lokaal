@@ -18,7 +18,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(LaatsteBeeld(c, sn) for sn in c.apparaten if sn not in c.stations)
+    async_add_entities([*(LaatsteBeeld(c, sn) for sn in c.apparaten if sn not in c.stations),
+                        *(LiveMomentopname(c, sn) for sn in c.apparaten if sn not in c.stations)])
 
 
 class LaatsteBeeld(CoordinatorEntity[EufyLokaalCoordinator], ImageEntity):
@@ -56,3 +57,33 @@ class LaatsteBeeld(CoordinatorEntity[EufyLokaalCoordinator], ImageEntity):
         i = self.coordinator.laatste_info.get(self._sn) or {}
         return {"bestand": b.get("pad"), "grootte": b.get("grootte"),
                 "gebeurtenissen": i.get("gebeurtenissen"), "bron": "lokaal (HomeBase)"}
+
+
+class LiveMomentopname(LaatsteBeeld):
+    """Het laatste live beeld (bij aanbellen, of via eufy_lokaal.momentopname)."""
+
+    _attr_name = "Live momentopname"
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c, sn)
+        self._attr_unique_id = f"{sn}_live_momentopname"
+
+    @property
+    def available(self) -> bool:
+        return bool((self.coordinator.momentopnamen.get(self._sn) or {}).get("data"))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        m = self.coordinator.momentopnamen.get(self._sn)
+        if m and m.get("data") and m["tijd"] != self._tijd:
+            self._tijd = m["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(m["tijd"], timezone.utc)
+        CoordinatorEntity._handle_coordinator_update(self)
+
+    async def async_image(self) -> bytes | None:
+        return (self.coordinator.momentopnamen.get(self._sn) or {}).get("data")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        m = self.coordinator.momentopnamen.get(self._sn) or {}
+        return {k: m.get(k) for k in ("reden", "duur_s", "grootte", "fout")}

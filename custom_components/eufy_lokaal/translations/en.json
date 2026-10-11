@@ -35,5 +35,11 @@
       "already_configured": "This account is already configured.",
       "reauth_successful": "Logged in again."
     }
+  },
+  "services": {
+    "momentopname": {
+      "name": "Live snapshot",
+      "description": "Fetches a live image from the camera via the HomeBase (local)."
+    }
   }
 }

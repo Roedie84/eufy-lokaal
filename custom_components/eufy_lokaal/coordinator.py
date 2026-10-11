@@ -112,6 +112,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.detecties: dict[str, dict[str, float]] = {}
         self.laatste_gebeurtenis: dict[str, dict] = {}
         self._bij_gebeurtenis: list = []
+        self.momentopnamen: dict[str, dict] = {}
         self.live_token = nieuw_token()
 
     # cloud ----------------------------------------------------------------------
@@ -500,11 +501,34 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if g["soort"] in soorten:
                 d[naam] = nu
         self.hass.bus.async_fire(f"{DOMAIN}_gebeurtenis", {k: v for k, v in g.items() if k != "ruw"})
+        if g["soort"] == "aangebeld" and sn in self.apparaten:
+            # Bij aanbellen meteen een live momentopname (de deurbel is dan toch wakker).
+            self.hass.async_create_background_task(self.async_momentopname(sn, "aangebeld"),
+                                                   f"{DOMAIN}_momentopname_{sn}")
         for terug in list(self._bij_gebeurtenis):
             terug(sn, g)
         # na afloop de detecties weer uit
         self.hass.loop.call_later(DUUR_S + 1, self.async_update_listeners)
         self.hass.loop.call_later(4, self._vraag_laatste_info, station_sn)
+
+    async def async_momentopname(self, sn: str, reden: str = "gevraagd") -> bool:
+        """Live beeld van een camera ophalen; klaar = gebeurtenis eufy_lokaal_momentopname."""
+        from .video import momentopname
+
+        begin = time.time()
+        try:
+            jpeg = await momentopname(self.live_stream(sn))
+        except Exception as err:  # noqa: BLE001
+            self.momentopnamen.setdefault(sn, {})["fout"] = f"{type(err).__name__}: {err}"
+            self.hass.bus.async_fire(f"{DOMAIN}_momentopname", {"apparaat_sn": sn, "gelukt": False,
+                                                                 "reden": reden, "fout": str(err)})
+            self.async_update_listeners()
+            return False
+        self.momentopnamen[sn] = {"data": jpeg, "tijd": time.time(), "duur_s": round(time.time() - begin, 1),
+                                  "reden": reden, "grootte": len(jpeg), "fout": None}
+        self.hass.bus.async_fire(f"{DOMAIN}_momentopname", {"apparaat_sn": sn, "gelukt": True, "reden": reden})
+        self.async_update_listeners()
+        return True
 
     def detectie_aan(self, sn: str, naam: str) -> bool:
         from .gebeurtenissen import DUUR_S

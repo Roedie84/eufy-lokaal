@@ -1,0 +1,5 @@
+momentopname:
+  target:
+    entity:
+      integration: eufy_lokaal
+      domain: camera

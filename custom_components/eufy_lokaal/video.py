@@ -275,10 +275,15 @@ class LiveStream:
                 raise
         return k
 
-    def kijker_weg(self, k: Kijker) -> None:
+    def kijker_weg(self, k: Kijker, meteen: bool = False) -> None:
         self.kijkers.discard(k)
-        if not self.kijkers and self.actief and self._stop_taak is None:
-            self._stop_taak = asyncio.get_running_loop().call_later(STOP_ZONDER_KIJKERS_S, self.stop)
+        if not self.kijkers and self.actief:
+            if meteen:
+                if self._stop_taak is not None:
+                    self._stop_taak.cancel()
+                self.stop()
+            elif self._stop_taak is None:
+                self._stop_taak = asyncio.get_running_loop().call_later(STOP_ZONDER_KIJKERS_S, self.stop)
 
     def stop(self) -> None:
         self._stop_taak = None
@@ -371,3 +376,44 @@ async def stuur_ts(stream: LiveStream, schrijf_async: Callable[[bytes], Any]) ->
         if muxer is not None:
             muxer.sluit()
         stream.kijker_weg(k)
+
+
+def keyframe_naar_jpeg(data: bytes, kwaliteit: int = 85, max_breedte: int = 1920) -> bytes:
+    """Een H.264-keyframe (Annex B, met SPS/PPS) naar JPEG. Blokkerend: in een executor draaien."""
+    import io
+
+    import av
+
+    codec = av.CodecContext.create("h264", "r")
+    beelden = []
+    for pakket in codec.parse(data):
+        beelden += codec.decode(pakket)
+    beelden += codec.decode(None) if not beelden else []
+    if not beelden:
+        raise ValueError("keyframe niet te decoderen")
+    beeld = beelden[0].to_image()
+    if beeld.width > max_breedte:
+        beeld = beeld.resize((max_breedte, round(beeld.height * max_breedte / beeld.width)))
+    uit = io.BytesIO()
+    beeld.save(uit, "JPEG", quality=kwaliteit)
+    return uit.getvalue()
+
+
+async def momentopname(stream: LiveStream, timeout: float = 12.0) -> bytes:
+    """Live beeld: stream (kort) starten, eerste keyframe pakken, naar JPEG.
+    Kijkt er verder niemand, dan stopt de stream meteen daarna (batterij)."""
+    k = await stream.kijker_erbij()
+    try:
+        einde = time.monotonic() + timeout
+        while True:
+            rest = einde - time.monotonic()
+            if rest <= 0:
+                raise TimeoutError("geen keyframe van de HomeBase")
+            f = await asyncio.wait_for(k.wachtrij.get(), rest)
+            if f is None:
+                raise ConnectionError("stream gestopt")
+            if f.audio or not f.keyframe:
+                continue
+            return await asyncio.get_running_loop().run_in_executor(None, keyframe_naar_jpeg, f.data)
+    finally:
+        stream.kijker_weg(k, meteen=True)

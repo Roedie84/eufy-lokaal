@@ -187,3 +187,27 @@ def test_geluid_in_mpegts(tmp_path):
                         "-of", "json", str(pad)], capture_output=True, text=True, check=True)
     namen = sorted(s["codec_name"] for s in json.loads(r.stdout)["streams"])
     assert namen == ["aac", "h264"]
+
+
+def test_momentopname_jpeg():
+    async def _proef():
+        stops = []
+        stream = v.LiveStream("T8214", 0, lambda s: None, lambda: stops.append(1))
+
+        async def stuur():
+            for _ in range(50):
+                if stream.sleutel is not None:
+                    break
+                await asyncio.sleep(0.02)
+            for fr in _frames()[1:20]:  # eerst geen keyframe
+                stream.bij_frame(_videobericht(fr, stream.sleutel, b"Q" * 16), 1)
+            stream.bij_frame(_videobericht(_frames()[0], stream.sleutel, b"Q" * 16), 1)
+
+        t = asyncio.ensure_future(stuur())
+        jpeg = await v.momentopname(stream, timeout=5)
+        await t
+        return jpeg, stream, stops
+
+    jpeg, stream, stops = asyncio.run(_proef())
+    assert jpeg[:2] == b"\xff\xd8" and len(jpeg) > 2000
+    assert not stream.actief and stops == [1]  # meteen gestopt (batterij)
