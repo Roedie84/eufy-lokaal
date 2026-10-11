@@ -264,7 +264,7 @@ class OpnamesSensor(_Basis):
     _attr_name = "Opnames"
     _attr_icon = "mdi:filmstrip-box-multiple"
     _attr_native_unit_of_measurement = "opnames"
-    _unrecorded_attributes = frozenset({"opnames"})
+    _unrecorded_attributes = frozenset({"opnames", "laatste_info_ruw"})
 
     def __init__(self, c, sn) -> None:
         super().__init__(c)
@@ -285,7 +285,8 @@ class OpnamesSensor(_Basis):
         o = self.coordinator.opnames.get(self._sn) or []
         return {"laatste_start": o[0].get("start_time") if o else None,
                 "laatste_einde": o[0].get("end_time") if o else None,
-                "opnames": o[:10]}
+                "opnames": o[:10],
+                "laatste_info_ruw": (self.coordinator.laatste_info.get(self._sn) or {}).get("ruw")}
 
 
 class StationFirmwareSensor(_Station):

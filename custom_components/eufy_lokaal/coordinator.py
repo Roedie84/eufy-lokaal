@@ -348,7 +348,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 pad = p.get("crop_hb3_path") or ""
                 vorig = self.laatste_info.get(sn) or {}
                 self.laatste_info[sn] = {"gebeurtenissen": p.get("event_count"), "pad": pad or None,
-                                         "cloud_pad": p.get("crop_cloud_path") or None, "tijd": nu}
+                                         "cloud_pad": p.get("crop_cloud_path") or None, "tijd": nu,
+                                         "ruw": p}  # v0.7.10: alles bewaren om detectiesoorten te leren
                 if vorig.get("gebeurtenissen") != p.get("event_count"):
                     nieuw = True
                     self._beweging_uit_teller(station_sn, sn, vorig.get("gebeurtenissen"), p.get("event_count"), nu)
@@ -373,11 +374,9 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                     sn = r.get("device_sn")
                     if not sn:
                         continue
-                    per_apparaat.setdefault(sn, {})[r.get("record_id")] = {
-                        k: r.get(k) for k in ("record_id", "start_time", "end_time", "storage_path",
-                                              "thumb_path", "trigger_type", "video_type", "storage_type",
-                                              "frame_num", "cloud_path")
-                    }
+                    # v0.7.10: het hele record bewaren (o.a. trigger_type en eventuele AI-velden),
+                    # zodat de codes voor persoon/dier/voertuig te herleiden zijn.
+                    per_apparaat.setdefault(sn, {})[r.get("record_id")] = dict(r)
             for sn, records in per_apparaat.items():
                 self.opnames[sn] = sorted(records.values(), key=lambda r: str(r.get("start_time")),
                                           reverse=True)[:20]

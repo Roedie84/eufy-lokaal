@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.10 — meetversie voor detectiesoorten
+
+- *Opnames* toont nu het volledige record van elke opname en de ruwe laatste info van de HomeBase (attribuut `laatste_info_ruw`, niet in de recorder). Daarmee worden de codes voor persoon, dier en voertuig herleid.
+
 ## v0.7.9 — beweging sneller in HA
 
 - Na elk bericht van een camera (wakker, beweging, live) wordt de laatste info na 3, 15, 40 en 75 s opgevraagd. Een opname staat pas in de database als hij klaar is; zo zie je beweging en beeld binnen ongeveer een minuut in plaats van tot 5 minuten later.
