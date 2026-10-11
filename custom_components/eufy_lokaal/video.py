@@ -38,6 +38,10 @@ STOP_ZONDER_KIJKERS_S = 20.0
 MAX_DUUR_S = 600.0
 GEEN_BEELD_TIMEOUT_S = 20.0
 MAX_WACHTRIJ_FRAMES = 120
+# Na de maximale duur niet meteen opnieuw starten: een lezer die blijft
+# herverbinden (zoals de stream-component na camera.record) zou een
+# batterijcamera anders eindeloos laten streamen.
+RUST_NA_MAX_DUUR_S = 300.0
 
 
 class RsaSleutel:
@@ -176,14 +180,21 @@ class LiveStream:
         self.formaat: tuple[int, int, int] | None = None
         self._stop_taak: asyncio.TimerHandle | None = None
         self.sessies = 0
+        self.rust_tot = 0.0
 
     def samenvatting(self) -> dict[str, Any]:
         return {"actief": self.actief, "kijkers": len(self.kijkers), "frames": self.frames,
                 "keyframes": self.keyframes, "fouten": self.fouten, "laatste_fout": self.laatste_fout,
                 "formaat": self.formaat, "gestart": self.gestart, "laatste_frame": self.laatste_frame,
-                "sessies": self.sessies}
+                "sessies": self.sessies, "rust_tot": self.rust_tot or None}
+
+    @property
+    def in_rust(self) -> bool:
+        return time.time() < self.rust_tot
 
     async def kijker_erbij(self) -> Kijker:
+        if self.in_rust and not self.actief:
+            raise ConnectionError("livestream rust na de maximale duur")
         k = Kijker()
         self.kijkers.add(k)
         if self._stop_taak is not None:
@@ -239,6 +250,8 @@ class LiveStream:
         for k in list(self.kijkers):
             _zet(k.wachtrij, f)
         if self.gestart and time.time() - self.gestart > MAX_DUUR_S:
+            self.rust_tot = time.time() + RUST_NA_MAX_DUUR_S
+            self.laatste_fout = "maximale duur bereikt; 5 minuten rust"
             self.stop()
 
 

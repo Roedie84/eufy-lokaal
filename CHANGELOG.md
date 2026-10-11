@@ -1,5 +1,12 @@
 # Changelog — Eufy Lokaal
 
+## v0.6.2 — livestream werkt; zuiniger en veiliger
+
+- Getest: Schuur/zolder (S350) 4K 15 fps en de deurbel (E340) 1600×2200, frames ontsleuteld zonder fouten.
+- Na de maximale duur (10 min) 5 minuten rust: een lezer die blijft herverbinden kan een batterijcamera niet eindeloos laten streamen.
+- Minder rekenwerk per videopakket (honderden per seconde).
+- `herverbonden`: waarom de sessie opnieuw werd opgebouwd.
+
 ## v0.6.1 — camera's van alle apparaten
 
 - `via_device` weggelaten: Home Assistant weigerde daardoor de camera-entiteiten van twee van de drie camera's.

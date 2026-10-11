@@ -196,6 +196,13 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 continue
             meting = s.meting if s is not None else None
             if s is not None:
+                m = s.meting
+                reden = ("ander IP" if s.ip != l["ip"] else "niet verbonden" if not m.verbonden else
+                         f"{round(time.time() - max(m.laatst_iets_ontvangen or 0, m.verbonden_sinds or 0))} s stil")
+                lijst = self.tellingen.setdefault("herverbonden", [])
+                lijst.append({"t": round(time.time()), "reden": reden})
+                del lijst[-6:-6]
+                del lijst[:-6]
                 if meting.verbonden:
                     meting.uitval += 1
                 s.sluit()
@@ -508,6 +515,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "laatste_stand_opdracht": t.get("laatste_stand_opdracht"),
             "antwoorden": t.get("antwoorden"),
             "database_antwoorden": t.get("database_antwoorden"),
+            "herverbonden": t.get("herverbonden"),
             "stations": len(self.stations),
             "apparaten": len(self.apparaten),
             "cloud_rondes": t["cloud_rondes"],

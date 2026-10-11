@@ -132,3 +132,16 @@ def test_stream_naar_kijker():
     stream, ontvangen, gestopt = asyncio.run(_proef())
     assert stream.frames == 20 and stream.fouten == 0 and gestopt == [1]
     assert ontvangen[:1] == b"\x47" and len(ontvangen) > 5000  # MPEG-TS sync-byte
+
+
+def test_rust_na_maximale_duur():
+    async def _proef():
+        stream = v.LiveStream("T8113", 2, lambda s: None, lambda: None)
+        k = await stream.kijker_erbij()
+        stream.gestart -= v.MAX_DUUR_S + 1
+        stream.bij_frame(_videobericht(_frames()[0], stream.sleutel, b"Q" * 16), 1)
+        assert not stream.actief and stream.in_rust
+        stream.kijker_weg(k)
+        with pytest.raises(ConnectionError):
+            await stream.kijker_erbij()
+    asyncio.run(_proef())

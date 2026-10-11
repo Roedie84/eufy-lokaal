@@ -333,6 +333,9 @@ def rsa_sessiesleutel(privesleutel: str, versleuteld: bytes) -> bytes:
 # --- de sessie -------------------------------------------------------------------
 
 
+_SOORT_HEX = {bytes([0xF1, b]): f"f1{b:02x}" for b in range(256)}
+
+
 @dataclass
 class Meting:
     verbonden: bool = False
@@ -367,12 +370,17 @@ class Meting:
         del self.laatste_data[:-12]
 
     def pakket(self, richting: str, data: bytes) -> None:
-        soort = data[:2].hex()
+        soort = _SOORT_HEX.get(data[:2]) or data[:2].hex()
         teller = self.ontvangen if richting == "in" else self.verzonden
         teller[soort] = teller.get(soort, 0) + 1
         if richting == "in":
             self.laatst_iets_ontvangen = time.time()
-            self.voorbeelden.setdefault(soort, data[:96].hex())
+            if soort not in self.voorbeelden:
+                self.voorbeelden[soort] = data[:96].hex()
+        # Tijdens video honderden DATA/ACK-pakketten per seconde: die niet
+        # allemaal in de lijst met laatste pakketten (scheelt rekenwerk).
+        if soort in ("f1d0", "f1d1") and teller[soort] % 200:
+            return
         self.laatste_pakketten.append(
             {"t": round(time.time(), 1), "r": richting, "soort": soort, "lengte": len(data),
              "begin": data[:16].hex()}
@@ -675,7 +683,8 @@ class P2PSessie:
             return  # bestanden (BINARY): latere stap
         bouwer = self._bouwer.setdefault(soort, Bouwer())
         klaar = bouwer.voeg_toe(data[8:])
-        self.meting.data_pakket(
+        if soort != SOORT_VIDEO:
+            self.meting.data_pakket(
             data, f"{len(klaar)} bericht(en)" if klaar else ("deel" if bouwer.kop else "geen XZYH-kop"))
         for kop, inhoud in klaar:
             if soort == SOORT_VIDEO:

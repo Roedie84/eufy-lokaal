@@ -28,6 +28,8 @@ class LiveView(HomeAssistantView):
         token = request.query.get("token", "")
         if coordinator is None or not hmac.compare_digest(token, coordinator.live_token):
             return web.Response(status=404)
+        if coordinator.live_stream(sn).in_rust and not coordinator.live_stream(sn).actief:
+            return web.Response(status=503, text="livestream rust")
         antwoord = web.StreamResponse(headers={"Content-Type": "video/mp2t", "Cache-Control": "no-store"})
         await antwoord.prepare(request)
         try:
