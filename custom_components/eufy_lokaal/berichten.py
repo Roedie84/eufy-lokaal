@@ -24,6 +24,7 @@ CMD_PING = 1139
 CMD_GATEWAYINFO = 1100
 CMD_DATABASE = 1306
 CMD_DATABASE_IMAGE = 1308
+CMD_CAMERA_ACTIEF = 1400  # camera meldt zich (wordt wakker), 16 bytes zonder JSON
 DB_QUERY_LATEST_INFO = 10013
 DB_QUERY_LOCAL = 10017
 
@@ -45,7 +46,7 @@ NAMEN = {
     CMD_GET_ALARM_MODE: "alarmstand", CMD_GET_DEVICE_PING: "apparaat_ping",
     CMD_GET_DELAY_ALARM: "vertraagd_alarm", CMD_NOTIFY_PAYLOAD: "melding",
     CMD_DOORBELL_NOTIFY_PAYLOAD: "deurbel_melding", CMD_PING: "ping",
-    CMD_DATABASE: "database", CMD_DATABASE_IMAGE: "afbeelding",
+    CMD_DATABASE: "database", CMD_DATABASE_IMAGE: "afbeelding", CMD_CAMERA_ACTIEF: "camera_actief",
 }
 
 

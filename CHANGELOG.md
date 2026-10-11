@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.8 — beweging van camera's
+
+- De HomeBase stuurt lokaal geen bewegingsbericht (2037) voor camera's; alleen aanbellen komt zo binnen. Beweging wordt nu herkend aan de gebeurtenisteller in de database: loopt die op, dan gaat *Beweging* 30 s aan en verschijnt het nieuwe beeld.
+- Een camera die wakker wordt (bericht 1400) laat na 3 en 12 s de laatste info opvragen, zodat beweging en beeld snel binnen zijn.
+
 ## v0.7.7 — geen dubbele ruimtenaam in entiteit-ID's
 
 - Heet een camera net als zijn ruimte (Zolder op de zolder), dan wordt het ID `zolder_…` in plaats van `zolder_zolder_…`.

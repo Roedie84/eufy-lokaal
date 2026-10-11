@@ -51,3 +51,56 @@ def test_parameternamen():
 def test_alleen_bekende_parameters():
     from custom_components.eufy_lokaal.parameternamen import bekend
     assert bekend(1013) and not bekend(987654) and not bekend(1101) and not bekend(1224)
+
+
+def _coord():
+    from custom_components.eufy_lokaal.coordinator import EufyLokaalCoordinator
+
+    c = object.__new__(EufyLokaalCoordinator)
+    c.hass = MagicMock()
+    c.stations = {"T8030": {"station_sn": "T8030"}}
+    c.apparaten = {"T8416": {"device_sn": "T8416", "station_sn": "T8030", "device_channel": 2}}
+    c.lokale_params, c.alarmstand, c.laatste_melding, c.berichten_per_soort = {}, {}, {}, {}
+    c.detecties, c.laatste_gebeurtenis, c._bij_gebeurtenis, c.sessies = {}, {}, [], {}
+    c.laatste_info, c.beelden, c.opnames, c._beeld_voor, c.tellingen = {}, {}, {}, {}, {}
+    c.async_update_listeners = MagicMock()
+    return c
+
+
+def _info(teller, pad="/zx/a.jpg"):
+    return {"soort": "database", "naam": "database", "kanaal": 255, "sub_opdracht": 10013,
+            "data": [{"device_sn": "T8416", "payload": {"event_count": teller, "crop_hb3_path": pad}}]}
+
+
+def test_beweging_uit_hogere_gebeurtenisteller():
+    c = _coord()
+    bij = c._bij_bericht_voor("T8030")
+    bij(_info(10))  # eerste meting: geen beweging
+    assert not c.detectie_aan("T8416", "beweging")
+    bij(_info(10))
+    assert not c.detectie_aan("T8416", "beweging")
+    bij(_info(11, "/zx/b.jpg"))
+    assert c.detectie_aan("T8416", "beweging")
+    assert c.laatste_gebeurtenis["T8416"]["bron"] == "nieuwe opname"
+
+
+def test_geen_dubbele_beweging_na_aanbellen():
+    import time
+
+    c = _coord()
+    bij = c._bij_bericht_voor("T8030")
+    bij(_info(5))
+    c.laatste_gebeurtenis["T8416"] = {"soort": "aangebeld", "tijd": time.time()}
+    bij(_info(6))
+    assert not c.detectie_aan("T8416", "beweging")
+
+
+def test_camera_actief_vraagt_laatste_info():
+    c = _coord()
+    bij = c._bij_bericht_voor("T8030")
+    bericht = b.ontleed(1400, bytes.fromhex("000000007f0000007d7b5a6e00000000"), kanaal=2)
+    assert bericht["naam"] == "camera_actief"
+    bij(bericht)
+    bij(bericht)  # binnen 20 s: niet nog eens
+    vertragingen = [a[0][0] for a in c.hass.loop.call_later.call_args_list]
+    assert vertragingen.count(3) == 1 and vertragingen.count(12) == 1

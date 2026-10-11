@@ -16,7 +16,8 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import p2p
-from .berichten import KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND, alarmstand_naam
+from .berichten import (CMD_CAMERA_ACTIEF, KANAAL_BINNEN, KANAAL_STATION, PARAM_ALARMSTAND, PARAM_BEWAKINGSSTAND,
+                        alarmstand_naam)
 from .p2p_sessie import P2PSessie
 from .cloud import PARAM_LAN_IP, CaptchaNodig, CloudFout, EMailCodeNodig, EufyCloud, Sessie, parameter
 from .const import (
@@ -103,6 +104,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.beelden: dict[str, dict] = {}
         self.opnames: dict[str, list] = {}
         self._beeld_voor: dict[str, tuple[str, float]] = {}  # bestand op de HomeBase -> (apparaat, gevraagd)
+        self._activiteit_gevraagd: dict[str, float] = {}
         self._info_ronde = 0
         # stap 6: livestreams
         from .video import nieuw_token
@@ -280,6 +282,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             if soort in ("melding", "alarmstand", "vertraagd_alarm", "alarm_ingeschakeld"):
                 # na een gebeurtenis staat er vaak een nieuw beeld klaar
                 self.hass.loop.call_later(8, self._vraag_laatste_info, station_sn)
+            elif b.get("opdracht") == CMD_CAMERA_ACTIEF and int(b.get("kanaal", KANAAL_STATION)) not in (
+                    KANAAL_STATION, KANAAL_BINNEN):
+                # v0.7.8: een camera die wakker wordt (bijv. door beweging) meldt zich met 1400;
+                # de beweging zelf blijkt pas uit een nieuwe opname in de database.
+                self._vraag_info_na_activiteit(station_sn)
             if soort == "antwoord":
                 lijst = self.tellingen.setdefault("antwoorden", [])
                 lijst.append({"opdracht": b.get("opdracht"), "code": b.get("returncode"), "t": round(nu)})
@@ -345,6 +352,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                          "cloud_pad": p.get("crop_cloud_path") or None, "tijd": nu}
                 if vorig.get("gebeurtenissen") != p.get("event_count"):
                     nieuw = True
+                    self._beweging_uit_teller(station_sn, sn, vorig.get("gebeurtenissen"), p.get("event_count"), nu)
                 gevraagd = self._beeld_voor.get(pad)
                 if pad and (self.beelden.get(sn) or {}).get("pad") != pad and \
                         (gevraagd is None or nu - gevraagd[1] > 120):
@@ -488,6 +496,32 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             return int(w) if w is not None else None
         except ValueError:
             return None
+
+    def _vraag_info_na_activiteit(self, station_sn: str) -> None:
+        """Na activiteit van een camera twee keer de laatste info vragen (hooguit eens per 20 s)."""
+        nu = time.time()
+        gevraagd = self.__dict__.setdefault("_activiteit_gevraagd", {})
+        if nu - gevraagd.get(station_sn, 0) < 20:
+            return
+        gevraagd[station_sn] = nu
+        self.hass.loop.call_later(3, self._vraag_laatste_info, station_sn)
+        self.hass.loop.call_later(12, self._vraag_laatste_info, station_sn)
+
+    def _beweging_uit_teller(self, station_sn: str, sn: str, oud, nieuw, nu: float) -> None:
+        """v0.7.8: de HomeBase stuurt lokaal geen 2037 bij beweging van een camera; wel loopt
+        de gebeurtenisteller in de database op. Een hogere teller = beweging, tenzij er net al
+        een gebeurtenis (aanbellen e.d.) van dat apparaat was."""
+        try:
+            oud_i, nieuw_i = int(oud), int(nieuw)
+        except (TypeError, ValueError):
+            return  # eerste meting (na start) of onleesbaar: geen beweging melden
+        if nieuw_i <= oud_i or sn not in self.apparaten:
+            return
+        vorige = (self.laatste_gebeurtenis.get(sn) or {}).get("tijd") or 0
+        if nu - vorige < 120:
+            return
+        self._gebeurtenis(station_sn, {"soort": "beweging", "event_type": None, "apparaat_sn": sn,
+                                       "persoon": None, "bron": "nieuwe opname"}, nu)
 
     def _gebeurtenis(self, station_sn: str, g: dict, nu: float) -> None:
         """Beweging, aanbellen e.d.: detectie aan, gebeurtenis op de bus."""
