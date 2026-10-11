@@ -295,10 +295,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         apparaten = [sn for sn, a in self.apparaten.items() if a.get("station_sn") == station_sn and sn != station_sn]
         if s is None or not s.levend or not apparaten:
             return
-        vandaag = dt_util.now()
-        begin = (vandaag - timedelta(days=1)).strftime("%Y%m%d")
-        s.vraag(opnames_tekst(self._account(station_sn), apparaten, begin, vandaag.strftime("%Y%m%d"),
-                              int(time.time() * 1000)), "opnames")
+        # Alleen vandaag: met een begin van gisteren geeft de HomeBase de eerste
+        # (oudste) opnames vanaf die datum, niet de nieuwste.
+        vandaag = dt_util.now().strftime("%Y%m%d")
+        s.vraag(opnames_tekst(self._account(station_sn), apparaten, vandaag, vandaag,
+                              int(time.time() * 1000), aantal=50), "opnames")
 
     def _bij_database(self, station_sn: str, b: dict) -> None:
         from .p2p_sessie import afbeelding_tekst

@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.5.3 — opnames van vandaag
+
+- De HomeBase geeft bij een begindatum de oudste opnames vanaf die dag; de vraag gaat nu over vandaag (tot 50), zodat de nieuwste erin staan.
+
 ## v0.5.2 — alle beelden, opnames per datum
 
 - Afbeeldingen in de URL-variant van base64 (`-`/`_`) worden nu ook gelezen; daardoor ontbrak het beeld van één camera.

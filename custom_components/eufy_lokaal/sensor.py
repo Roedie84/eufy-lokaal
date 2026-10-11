@@ -225,7 +225,7 @@ class ParametersSensor(_Basis):
 
 
 class OpnamesSensor(_Basis):
-    """Stap 5: opnames van gisteren en vandaag op de HomeBase."""
+    """Stap 5: opnames van vandaag op de HomeBase."""
 
     _attr_name = "Opnames"
     _attr_icon = "mdi:filmstrip-box-multiple"
