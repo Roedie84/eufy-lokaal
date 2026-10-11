@@ -33,27 +33,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _herstel_entiteit_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Eenmalig: entiteit-ID's opnieuw laten maken zoals Home Assistant dat zelf
     doet (ruimte + apparaat + naam). Nodig als een apparaat van ruimte is
-    gewisseld: Home Assistant geeft verwijderde entiteiten hun oude ID terug."""
+    gewisseld: Home Assistant geeft verwijderde entiteiten hun oude ID terug.
+    Heet het apparaat net als zijn ruimte ("Zolder" op de zolder), dan komt de
+    naam maar één keer in het ID: sensor.zolder_batterij, niet zolder_zolder."""
     import logging
+    import re
 
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
+    from homeassistant.util import slugify
 
-    if entry.data.get("entiteit_ids") == 1:
+    if entry.data.get("entiteit_ids", 0) >= 2:
         return
     reg = er.async_get(hass)
-    if not hasattr(reg, "async_regenerate_entity_id"):
-        return
+    apparaten, ruimtes = dr.async_get(hass), ar.async_get(hass)
+    log = logging.getLogger(__name__)
     gereserveerd: set[str] = set()
     for e in er.async_entries_for_config_entry(reg, entry.entry_id):
-        try:
-            nieuw = reg.async_regenerate_entity_id(e, reserved_entity_ids=gereserveerd)
-        except Exception:  # noqa: BLE001
-            continue
+        nieuw = e.entity_id
+        if entry.data.get("entiteit_ids") != 1 and hasattr(reg, "async_regenerate_entity_id"):
+            try:
+                nieuw = reg.async_regenerate_entity_id(e, reserved_entity_ids=gereserveerd)
+            except Exception:  # noqa: BLE001
+                pass
+        apparaat = apparaten.async_get(e.device_id) if e.device_id else None
+        ruimte = ruimtes.async_get_area(apparaat.area_id) if apparaat and apparaat.area_id else None
+        if apparaat and ruimte:
+            naam = slugify(apparaat.name_by_user or apparaat.name or "")
+            domein, obj = nieuw.split(".", 1)
+            if naam and slugify(ruimte.name) == naam and (obj == f"{naam}_{naam}" or obj.startswith(f"{naam}_{naam}_")):
+                obj = naam + obj[len(naam) * 2 + 1:]
+                basis = re.sub(r"_\d+$", "", obj)
+                if basis != obj and reg.async_get(f"{domein}.{basis}") is None and f"{domein}.{basis}" not in gereserveerd:
+                    obj = basis
+                kandidaat = f"{domein}.{obj}"
+                if reg.async_get(kandidaat) is None or kandidaat == e.entity_id:
+                    nieuw = kandidaat
         gereserveerd.add(nieuw)
-        if nieuw != e.entity_id:
-            logging.getLogger(__name__).warning("Entiteit-ID %s wordt %s", e.entity_id, nieuw)
+        if nieuw != e.entity_id and reg.async_get(nieuw) is None:
+            log.warning("Entiteit-ID %s wordt %s", e.entity_id, nieuw)
             reg.async_update_entity(e.entity_id, new_entity_id=nieuw)
-    hass.config_entries.async_update_entry(entry, data={**entry.data, "entiteit_ids": 1})
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "entiteit_ids": 2})
 
 
 def _momentopname_dienst(hass: HomeAssistant):

@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.7 — geen dubbele ruimtenaam in entiteit-ID's
+
+- Heet een camera net als zijn ruimte (Zolder op de zolder), dan wordt het ID `zolder_…` in plaats van `zolder_zolder_…`.
+
 ## v0.7.6 — entiteit-ID's volgen de ruimte
 
 - Eenmalig worden de entiteit-ID's opnieuw gemaakt zoals Home Assistant dat zelf doet (ruimte + apparaat + naam). Na het verplaatsen van een camera naar een andere ruimte gaf Home Assistant de oude ID's terug.
