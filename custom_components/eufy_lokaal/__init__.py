@@ -24,9 +24,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.start_lokaal()
+    _herstel_entiteit_ids(hass, entry)
     if not hass.services.has_service(DOMAIN, "momentopname"):
         hass.services.async_register(DOMAIN, "momentopname", _momentopname_dienst(hass))
     return True
+
+
+def _herstel_entiteit_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Eenmalig: entiteit-ID's opnieuw laten maken zoals Home Assistant dat zelf
+    doet (ruimte + apparaat + naam). Nodig als een apparaat van ruimte is
+    gewisseld: Home Assistant geeft verwijderde entiteiten hun oude ID terug."""
+    import logging
+
+    from homeassistant.helpers import entity_registry as er
+
+    if entry.data.get("entiteit_ids") == 1:
+        return
+    reg = er.async_get(hass)
+    if not hasattr(reg, "async_regenerate_entity_id"):
+        return
+    gereserveerd: set[str] = set()
+    for e in er.async_entries_for_config_entry(reg, entry.entry_id):
+        try:
+            nieuw = reg.async_regenerate_entity_id(e, reserved_entity_ids=gereserveerd)
+        except Exception:  # noqa: BLE001
+            continue
+        gereserveerd.add(nieuw)
+        if nieuw != e.entity_id:
+            logging.getLogger(__name__).warning("Entiteit-ID %s wordt %s", e.entity_id, nieuw)
+            reg.async_update_entity(e.entity_id, new_entity_id=nieuw)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "entiteit_ids": 1})
 
 
 def _momentopname_dienst(hass: HomeAssistant):

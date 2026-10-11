@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.6 — entiteit-ID's volgen de ruimte
+
+- Eenmalig worden de entiteit-ID's opnieuw gemaakt zoals Home Assistant dat zelf doet (ruimte + apparaat + naam). Na het verplaatsen van een camera naar een andere ruimte gaf Home Assistant de oude ID's terug.
+
 ## v0.7.5 — geen dubbele parameters
 
 - Parameters die al een eigen entiteit hebben (batterij, wifi-signaal, alarmstand, bewakingsstand, LAN-IP) worden geen extra parameter-entiteit meer; bestaande worden opgeruimd.
