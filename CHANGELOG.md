@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.11 — beelden direct na het opstarten
+
+- Zodra de lokale sessie staat, worden laatste beelden en opnames meteen opgevraagd. Lukte de eerste verbinding niet, dan bleven ze tot 5 minuten onbeschikbaar.
+
 ## v0.7.10 — meetversie voor detectiesoorten
 
 - *Opnames* toont nu het volledige record van elke opname en de ruwe laatste info van de HomeBase (attribuut `laatste_info_ruw`, niet in de recorder). Daarmee worden de codes voor persoon, dier en voertuig herleid.

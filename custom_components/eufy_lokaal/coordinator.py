@@ -185,8 +185,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             }
         await self._houd_sessies()
         self._info_ronde += 1
-        if self._info_ronde % 5 == 1:  # elke 5 minuten (en meteen na de start)
-            for sn in self.sessies:
+        gevraagd = self.__dict__.setdefault("_info_voor_sessie", {})
+        for sn, s in self.sessies.items():
+            # elke 5 minuten, en meteen zodra een (nieuwe) sessie staat (v0.7.11: niet tot 5 min wachten)
+            if self._info_ronde % 5 == 1 or (s.levend and gevraagd.get(sn) is not s):
+                if s.levend:
+                    gevraagd[sn] = s
                 self.hass.loop.call_later(15, self._vraag_laatste_info, sn)
         self.async_update_listeners()
 
