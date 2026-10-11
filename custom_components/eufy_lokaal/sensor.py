@@ -43,6 +43,21 @@ async def async_setup_entry(
 
     # Elke lokale parameter als eigen entiteit; ze komen pas na de eerste
     # CMD_CAMERA_INFO binnen, dus bij elke update kijken wat er nieuw is.
+    # Alleen parameters met een bekende naam; "Parameter <nummer>" zegt niemand iets.
+    from homeassistant.helpers import entity_registry as er
+
+    from .parameternamen import bekend as naam_bekend
+
+    reg = er.async_get(hass)
+    for e in er.async_entries_for_config_entry(reg, entry.entry_id):
+        if e.domain == "sensor" and "_param_" in (e.unique_id or ""):
+            try:
+                nummer = int(e.unique_id.rsplit("_param_", 1)[1])
+            except ValueError:
+                continue
+            if not naam_bekend(nummer):
+                reg.async_remove(e.entity_id)
+
     bekend: set[tuple[str, int]] = set()
 
     @callback
@@ -50,6 +65,8 @@ async def async_setup_entry(
         nieuw = []
         for sn in list(c.stations) + [s for s in c.apparaten if s not in c.stations]:
             for nummer in c.lokale_parameters(sn):
+                if not naam_bekend(nummer):
+                    continue
                 if (sn, nummer) not in bekend:
                     bekend.add((sn, nummer))
                     nieuw.append(ParameterSensor(c, sn, nummer))

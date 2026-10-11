@@ -600,5 +600,9 @@ ENGELS = {
 }
 
 
+def bekend(nummer: int) -> bool:
+    return nummer in NEDERLANDS or nummer in ENGELS
+
+
 def parameternaam(nummer: int) -> str:
     return NEDERLANDS.get(nummer) or ENGELS.get(nummer) or f"Parameter {nummer}"

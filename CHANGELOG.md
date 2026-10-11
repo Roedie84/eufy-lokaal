@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.4 — alleen parameters met een naam
+
+- Parameters zonder bekende naam ("Parameter <nummer>") worden geen entiteit meer; bestaande worden bij het opstarten uit het entiteitenregister verwijderd.
+
 ## v0.7.3 — gebeurtenisbeeld sneller binnen
 
 - Na een gebeurtenis (beweging, aanbellen) wordt het nieuwe beeld na 4 én na 15 s opgevraagd, zodat **Laatste beeld** vrijwel direct bijgewerkt is (nodig om beelden bij beweging op te slaan).

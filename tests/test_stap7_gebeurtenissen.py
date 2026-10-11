@@ -46,3 +46,8 @@ def test_parameternamen():
     assert parameternaam(1013) == "Infrarood"
     assert parameternaam(1249) == "Clipduur"
     assert parameternaam(987654) == "Parameter 987654"
+
+
+def test_alleen_bekende_parameters():
+    from custom_components.eufy_lokaal.parameternamen import bekend
+    assert bekend(1101) and bekend(1013) and not bekend(987654)
