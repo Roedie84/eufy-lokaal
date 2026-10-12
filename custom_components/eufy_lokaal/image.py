@@ -67,6 +67,11 @@ class LiveMomentopname(LaatsteBeeld):
     def __init__(self, c, sn) -> None:
         super().__init__(c, sn)
         self._attr_unique_id = f"{sn}_live_momentopname"
+        # v0.7.17: een bewaard beeld van voor de herstart is meteen zichtbaar
+        m = c.momentopnamen.get(sn) or {}
+        if m.get("data"):
+            self._tijd = m["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(m["tijd"], timezone.utc)
 
     @property
     def available(self) -> bool:
@@ -86,4 +91,6 @@ class LiveMomentopname(LaatsteBeeld):
     @property
     def extra_state_attributes(self) -> dict:
         m = self.coordinator.momentopnamen.get(self._sn) or {}
-        return {k: m.get(k) for k in ("reden", "duur_s", "grootte", "fout")}
+        uit = {k: m.get(k) for k in ("reden", "duur_s", "grootte", "fout")}
+        uit["bewaard"] = bool(m.get("bewaard"))
+        return uit

@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.17 — live momentopname overleeft een herstart
+
+- *Live momentopname* stond alleen in het geheugen. Na elke herstart van Home Assistant waren de momentopnames van deurbel en camera's onbeschikbaar, tot er weer werd aangebeld of de dienst `eufy_lokaal.momentopname` liep. Het laatste beeld per camera wordt nu ook bewaard in `.storage/eufy_lokaal/` en bij het opstarten teruggezet, met tijd en reden. Het attribuut `bewaard` zegt of het beeld van voor de herstart is.
+
 ## v0.7.16 — alleen zinvolle parameters
 
 - De HomeBase stuurt per camera ook alle instellingen van andere apparaattypen mee. Nog maar 12 parameters worden een eigen entiteit, met Nederlandse naam en eenheid: PIR-sensor, status-LED, batterijtemperatuur, dagen in gebruik, detecties en opnames totaal, luidsprekervolume, microfoon/luidspreker uit, clipduur, bewegingsgevoeligheid en nachtzichtmodus. De rest wordt bij het opstarten opgeruimd en blijft zichtbaar in *Lokale parameters*.

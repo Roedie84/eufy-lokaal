@@ -663,9 +663,41 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             return False
         self.momentopnamen[sn] = {"data": jpeg, "tijd": time.time(), "duur_s": round(time.time() - begin, 1),
                                   "reden": reden, "grootte": len(jpeg), "fout": None}
+        await self._async_momentopname_bewaren(sn)
         self.hass.bus.async_fire(f"{DOMAIN}_momentopname", {"apparaat_sn": sn, "gelukt": True, "reden": reden})
         self.async_update_listeners()
         return True
+
+    def _opslagmap(self) -> str:
+        from .opslag import MAP
+
+        return self.hass.config.path(".storage", *MAP)
+
+    async def _async_momentopname_bewaren(self, sn: str) -> None:
+        """v0.7.17: het beeld ook op schijf, zodat het een herstart overleeft."""
+        from .opslag import momentopname_opslaan
+
+        try:
+            await self.hass.async_add_executor_job(momentopname_opslaan, self._opslagmap(), sn,
+                                                   self.momentopnamen[sn])
+        except OSError as err:
+            _LOGGER.warning("Momentopname van %s niet bewaard: %s", sn, err)
+
+    async def async_momentopnamen_laden(self) -> None:
+        """v0.7.17: na het opstarten de bewaarde momentopnamen terugzetten."""
+        from .opslag import momentopname_laden
+
+        map_ = self._opslagmap()
+        for sn in self.apparaten:
+            if sn in self.stations or sn in self.momentopnamen:
+                continue
+            try:
+                m = await self.hass.async_add_executor_job(momentopname_laden, map_, sn)
+            except OSError as err:
+                _LOGGER.warning("Bewaarde momentopname van %s niet gelezen: %s", sn, err)
+                continue
+            if m:
+                self.momentopnamen[sn] = m
 
     def detectie_aan(self, sn: str, naam: str) -> bool:
         from .gebeurtenissen import DUUR_S
