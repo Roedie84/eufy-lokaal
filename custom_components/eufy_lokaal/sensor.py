@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
+from homeassistant.const import MATCH_ALL, PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -106,6 +106,8 @@ class EufyLokaalSensor(_Basis):
     _attr_name = "Eufy lokaal"
     _attr_icon = "mdi:shield-home-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # v0.7.18: ~8,5 KB diagnose per update; niet naar de recorder (live blijft)
+    _unrecorded_attributes = frozenset({MATCH_ALL})
 
     def __init__(self, c: EufyLokaalCoordinator, entry: ConfigEntry) -> None:
         super().__init__(c)
@@ -168,6 +170,8 @@ class StationP2PSensor(_Station):
 
     _attr_name = "P2P"
     _attr_icon = "mdi:lock-check-outline"
+    # v0.7.18: ~4,4 KB pakket-/hexdumps per update; niet naar de recorder
+    _unrecorded_attributes = frozenset({MATCH_ALL})
 
     def __init__(self, c, sn) -> None:
         super().__init__(c, sn, "p2p")

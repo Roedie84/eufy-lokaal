@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.18 — diagnose niet meer in de database
+
+- De diagnosesensoren *Eufy lokaal* (~8,5 KB) en *P2P* van de HomeBase (~4,4 KB, pakket- en hexdumps) schreven hun attributen bij elke update naar de recorder: samen ongeveer 60 MB per dag. Die attributen gaan niet meer naar de database; live blijven ze gewoon zichtbaar, net als in de diagnostiek.
+
 ## v0.7.17 — live momentopname overleeft een herstart
 
 - *Live momentopname* stond alleen in het geheugen. Na elke herstart van Home Assistant waren de momentopnames van deurbel en camera's onbeschikbaar, tot er weer werd aangebeld of de dienst `eufy_lokaal.momentopname` liep. Het laatste beeld per camera wordt nu ook bewaard in `.storage/eufy_lokaal/` en bij het opstarten teruggezet, met tijd en reden. Het attribuut `bewaard` zegt of het beeld van voor de herstart is.
