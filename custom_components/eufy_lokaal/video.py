@@ -496,3 +496,14 @@ async def momentopname(stream: LiveStream, timeout: float = 12.0) -> bytes:
                     verzameld = []  # volgende keyframe proberen
     finally:
         stream.kijker_weg(k, meteen=True)
+
+
+def live_token_voor(hass) -> str:
+    """v0.7.19: het livestream-token van deze Home Assistant-run.
+
+    Eén token per run, bewaard in ``hass.data``: een herladen integratie
+    houdt hetzelfde token, zodat een stream die HA al met de oude URL had
+    aangemaakt blijft werken (16/17-10: 113 keer 404 tot de herstart)."""
+    from .const import DOMAIN
+
+    return hass.data.setdefault(f"{DOMAIN}_live_token", nieuw_token())

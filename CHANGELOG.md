@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.19 — livestream blijft bereikbaar na herladen
+
+- Gevonden bij de HA-controle van 17-10: de stream van de deurbel gaf sinds 16-10 elke ~15 minuten "404 Not Found" (113 keer). Het livestream-token hoorde bij de coördinator; na het herladen van de integratie kwam er een nieuw token, terwijl de stream van Home Assistant de oude URL bleef gebruiken.
+- Nu één token per Home Assistant-run (in `hass.data`): herladen houdt hetzelfde token.
+
 ## v0.7.18 — diagnose niet meer in de database
 
 - De diagnosesensoren *Eufy lokaal* (~8,5 KB) en *P2P* van de HomeBase (~4,4 KB, pakket- en hexdumps) schreven hun attributen bij elke update naar de recorder: samen ongeveer 60 MB per dag. Die attributen gaan niet meer naar de database; live blijven ze gewoon zichtbaar, net als in de diagnostiek.

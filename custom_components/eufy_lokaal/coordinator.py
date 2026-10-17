@@ -108,7 +108,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self._activiteit_gevraagd: dict[str, float] = {}
         self._info_ronde = 0
         # stap 6: livestreams
-        from .video import nieuw_token
+        from .video import live_token_voor
 
         self.live: dict[str, "LiveStream"] = {}
         # gebeurtenissen per apparaat: soort -> laatste tijd
@@ -116,7 +116,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.laatste_gebeurtenis: dict[str, dict] = {}
         self._bij_gebeurtenis: list = []
         self.momentopnamen: dict[str, dict] = {}
-        self.live_token = nieuw_token()
+        # v0.7.19: één token per Home Assistant-run, niet per coördinator.
+        # Na het herladen van de integratie kreeg de coördinator een nieuw
+        # token, maar de stream van HA bleef de oude URL gebruiken: 16/17-10
+        # elke ~15 min "404 Not Found" (113 keer), tot de volgende herstart.
+        self.live_token = live_token_voor(hass)
 
     # cloud ----------------------------------------------------------------------
 
