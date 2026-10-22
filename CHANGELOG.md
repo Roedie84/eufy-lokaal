@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.20 — momentopname van de camera's
+
+- Gevonden bij de opschoonronde van 22-10: *Live momentopname* van achtertuin en zolder was sinds 11-10 onbeschikbaar. Er wordt daar nooit aangebeld, dus er kwam nooit een momentopname. De entiteit toont nu het laatste beeld van de HomeBase zolang er geen live beeld is; het attribuut `bron` zegt welk beeld het is (`live` of `laatste beeld (HomeBase)`).
+- De momentopname van de zolder (S350, 4K) mislukte steeds met een lege `TimeoutError`: er kwamen wel frames en keyframes binnen, maar met 4 frames werd het nooit een beeld. Nu worden na een mislukte poging meer frames verzameld (tot 60) en via de parser van FFmpeg gedecodeerd (een keyframe dat over meerdere berichten verdeeld is, lukt zo ook), wordt ook de andere codec (H.264/H.265) geprobeerd, en is de time-out 20 s in plaats van 12 s.
+- Lukt het toch niet, dan zegt de fout hoeveel frames en keyframes er kwamen, welke codec en waarom het decoderen mislukte. De ruwe videodata staat dan in `.storage/eufy_lokaal/momentopname_<serienummer>_mislukt.bin` voor de analyse.
+
 ## v0.7.19 — livestream blijft bereikbaar na herladen
 
 - Gevonden bij de HA-controle van 17-10: de stream van de deurbel gaf sinds 16-10 elke ~15 minuten "404 Not Found" (113 keer). Het livestream-token hoorde bij de coördinator; na het herladen van de integratie kwam er een nieuw token, terwijl de stream van Home Assistant de oude URL bleef gebruiken.

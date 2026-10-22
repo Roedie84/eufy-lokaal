@@ -429,30 +429,70 @@ def parametersets(data: bytes, codec: str = "h264") -> bytes:
     return uit
 
 
-def frames_naar_jpeg(frames: list[bytes], kwaliteit: int = 85, max_breedte: int = 1920,
-                     codec: str = "h264") -> bytes:
-    """H.264-frames (Annex B; het eerste een keyframe, liefst met SPS/PPS)
-    decoderen tot er een beeld is, en dat als JPEG. Blokkerend: executor."""
-    import io
-
+def _decodeer_los(frames: list[bytes], codec: str) -> list:
+    """Elk frame als eigen pakket (zoals de HomeBase ze stuurt)."""
     import av
 
     decoder = av.CodecContext.create(codec, "r")
-    beelden = []
+    beelden: list = []
     for data in frames:
         try:
             beelden += decoder.decode(av.Packet(data))
-        except av.error.InvalidDataError:
+        except av.error.FFmpegError:
             continue
+        if beelden:
+            return beelden
+    try:
+        beelden += decoder.decode(None)
+    except av.error.FFmpegError:
+        pass
+    return beelden
+
+
+def _decodeer_parser(frames: list[bytes], codec: str) -> list:
+    """v0.7.20: alles achter elkaar door de parser van FFmpeg. Die knipt de
+    Annex B-stroom zelf in pakketten, ook als een (4K-)keyframe over
+    meerdere berichten verdeeld is of een bericht meer dan een beeld bevat."""
+    import av
+
+    decoder = av.CodecContext.create(codec, "r")
+    beelden: list = []
+    for brok in [*frames, None]:
+        try:
+            for pakket in decoder.parse(brok):
+                beelden += decoder.decode(pakket)
+                if beelden:
+                    return beelden
+        except av.error.FFmpegError:
+            continue
+    try:
+        beelden += decoder.decode(None)
+    except av.error.FFmpegError:
+        pass
+    return beelden
+
+
+def frames_naar_jpeg(frames: list[bytes], kwaliteit: int = 85, max_breedte: int = 1920,
+                     codec: str = "h264") -> bytes:
+    """H.264/H.265-frames (Annex B; het eerste een keyframe, liefst met SPS/PPS)
+    decoderen tot er een beeld is, en dat als JPEG. Blokkerend: executor.
+
+    v0.7.20: lukt het niet per frame, dan via de parser, en daarna nog eens
+    met de andere codec (een verkeerd herkende codec gaf nooit een beeld)."""
+    import io
+
+    andere = "h264" if codec == "hevc" else "hevc"
+    beelden: list = []
+    for c in (codec, andere):
+        for methode in (_decodeer_los, _decodeer_parser):
+            beelden = methode(frames, c)
+            if beelden:
+                break
         if beelden:
             break
     if not beelden:
-        try:
-            beelden += decoder.decode(None)
-        except av.error.EOFError:
-            pass
-    if not beelden:
-        raise ValueError("keyframe niet te decoderen")
+        raise ValueError(f"keyframe niet te decoderen ({codec}, {len(frames)} frames, "
+                         f"{sum(len(f) for f in frames)} bytes)")
     beeld = beelden[0].to_image()
     if beeld.width > max_breedte:
         beeld = beeld.resize((max_breedte, round(beeld.height * max_breedte / beeld.width)))
@@ -465,35 +505,76 @@ def keyframe_naar_jpeg(data: bytes, kwaliteit: int = 85, max_breedte: int = 1920
     return frames_naar_jpeg([data], kwaliteit, max_breedte)
 
 
-async def momentopname(stream: LiveStream, timeout: float = 12.0) -> bytes:
-    """Live beeld: stream (kort) starten, keyframe (+ een paar frames erna)
-    pakken, naar JPEG. Kijkt er verder niemand, dan stopt de stream meteen."""
+class GeenBeeld(TimeoutError):
+    """v0.7.20: geen live beeld, met wat er wel binnenkwam (voor de diagnose)."""
+
+    def __init__(self, melding: str, monster: bytes = b"") -> None:
+        super().__init__(melding)
+        self.monster = monster
+
+
+PROBEER_BIJ = (4, 10, 25, 60)  # na zoveel frames vanaf een keyframe decoderen
+MAX_VERZAMELD = 60
+MONSTER_MAX = 4 * 1024 * 1024
+
+
+async def momentopname(stream: LiveStream, timeout: float = 20.0) -> bytes:
+    """Live beeld: stream (kort) starten, keyframe (+ frames erna) pakken,
+    naar JPEG. Kijkt er verder niemand, dan stopt de stream meteen.
+
+    v0.7.20: bij een mislukte decodering niet meteen weggooien maar meer
+    frames verzamelen (4K-camera's als de S350 kwamen met 4 frames nooit tot
+    een beeld), time-out 12 -> 20 s, en een time-out zegt nu wat er binnenkwam."""
     k = await stream.kijker_erbij()
+    frames = keyframes = 0
+    codec = "h264"
+    laatste_fout = None
+    monster = b""
     try:
         einde = time.monotonic() + timeout
         sets = b""
         verzameld: list[bytes] = []
         while True:
             rest = einde - time.monotonic()
+            f = None
+            if rest > 0:
+                try:
+                    f = await asyncio.wait_for(k.wachtrij.get(), rest)
+                except asyncio.TimeoutError:
+                    rest = 0
+                else:
+                    if f is None:
+                        raise ConnectionError("stream gestopt")
             if rest <= 0:
-                raise TimeoutError("geen bruikbaar beeld van de HomeBase")
-            f = await asyncio.wait_for(k.wachtrij.get(), rest)
-            if f is None:
-                raise ConnectionError("stream gestopt")
+                raise GeenBeeld(
+                    f"geen bruikbaar beeld van de HomeBase in {timeout:.0f} s: {frames} videoframes, "
+                    f"{keyframes} keyframes, codec {codec}"
+                    + (f", laatste fout: {laatste_fout}" if laatste_fout else ""),
+                    monster or b"".join(verzameld)[:MONSTER_MAX])
             if f.audio:
                 continue
+            frames += 1
+            keyframes += bool(f.keyframe)
+            codec = f.codec
             ps = parametersets(f.data, f.codec)
             if ps:
                 sets = ps
             if not verzameld and not f.keyframe:
                 continue
-            verzameld.append(f.data if not verzameld and ps else (sets + f.data if not verzameld else f.data))
-            if len(verzameld) >= 4:
+            if not verzameld:
+                verzameld.append(f.data if ps or not sets else sets + f.data)
+            else:
+                verzameld.append(f.data)
+            if len(verzameld) in PROBEER_BIJ:
                 try:
                     return await asyncio.get_running_loop().run_in_executor(
-                        None, frames_naar_jpeg, verzameld, 85, 1920, f.codec)
-                except ValueError:
-                    verzameld = []  # volgende keyframe proberen
+                        None, frames_naar_jpeg, list(verzameld), 85, 1920, f.codec)
+                except ValueError as err:
+                    laatste_fout = str(err)
+                    if not monster:
+                        monster = b"".join(verzameld)[:MONSTER_MAX]
+            if len(verzameld) >= MAX_VERZAMELD:
+                verzameld = []  # volgende keyframe proberen
     finally:
         stream.kijker_weg(k, meteen=True)
 

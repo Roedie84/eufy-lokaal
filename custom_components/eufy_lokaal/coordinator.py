@@ -660,7 +660,13 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         try:
             jpeg = await momentopname(self.live_stream(sn))
         except Exception as err:  # noqa: BLE001
-            self.momentopnamen.setdefault(sn, {})["fout"] = f"{type(err).__name__}: {err}"
+            m = self.momentopnamen.setdefault(sn, {})
+            m["fout"] = f"{type(err).__name__}: {err}"
+            m["fout_tijd"] = time.time()
+            monster = getattr(err, "monster", b"")
+            if monster:
+                # v0.7.20: wat er wel binnenkwam bewaren, voor de analyse
+                await self._async_monster_bewaren(sn, monster)
             self.hass.bus.async_fire(f"{DOMAIN}_momentopname", {"apparaat_sn": sn, "gelukt": False,
                                                                  "reden": reden, "fout": str(err)})
             self.async_update_listeners()
@@ -686,6 +692,14 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                                    self.momentopnamen[sn])
         except OSError as err:
             _LOGGER.warning("Momentopname van %s niet bewaard: %s", sn, err)
+
+    async def _async_monster_bewaren(self, sn: str, monster: bytes) -> None:
+        from .opslag import monster_opslaan
+
+        try:
+            await self.hass.async_add_executor_job(monster_opslaan, self._opslagmap(), sn, monster)
+        except OSError as err:
+            _LOGGER.warning("Videomonster van %s niet bewaard: %s", sn, err)
 
     async def async_momentopnamen_laden(self) -> None:
         """v0.7.17: na het opstarten de bewaarde momentopnamen terugzetten."""

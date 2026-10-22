@@ -60,7 +60,12 @@ class LaatsteBeeld(CoordinatorEntity[EufyLokaalCoordinator], ImageEntity):
 
 
 class LiveMomentopname(LaatsteBeeld):
-    """Het laatste live beeld (bij aanbellen, of via eufy_lokaal.momentopname)."""
+    """Het laatste live beeld (bij aanbellen, of via eufy_lokaal.momentopname).
+
+    v0.7.20: is er (nog) geen live beeld, bijvoorbeeld bij een camera waar
+    nooit wordt aangebeld, dan het laatste beeld van de HomeBase, met
+    ``bron`` erbij. Zo is de entiteit niet onbeschikbaar zolang er geen
+    momentopname is geweest."""
 
     _attr_name = "Live momentopname"
 
@@ -68,29 +73,40 @@ class LiveMomentopname(LaatsteBeeld):
         super().__init__(c, sn)
         self._attr_unique_id = f"{sn}_live_momentopname"
         # v0.7.17: een bewaard beeld van voor de herstart is meteen zichtbaar
-        m = c.momentopnamen.get(sn) or {}
+        b = self._beeld()[1]
+        if b:
+            self._tijd = b["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(b["tijd"], timezone.utc)
+
+    def _beeld(self) -> tuple[str | None, dict | None]:
+        m = self.coordinator.momentopnamen.get(self._sn) or {}
         if m.get("data"):
-            self._tijd = m["tijd"]
-            self._attr_image_last_updated = datetime.fromtimestamp(m["tijd"], timezone.utc)
+            return "live", m
+        b = self.coordinator.beelden.get(self._sn)
+        if b and b.get("data"):
+            return "laatste beeld (HomeBase)", b
+        return None, None
 
     @property
     def available(self) -> bool:
-        return bool((self.coordinator.momentopnamen.get(self._sn) or {}).get("data"))
+        return self._beeld()[1] is not None
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        m = self.coordinator.momentopnamen.get(self._sn)
-        if m and m.get("data") and m["tijd"] != self._tijd:
-            self._tijd = m["tijd"]
-            self._attr_image_last_updated = datetime.fromtimestamp(m["tijd"], timezone.utc)
+        b = self._beeld()[1]
+        if b and b["tijd"] != self._tijd:
+            self._tijd = b["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(b["tijd"], timezone.utc)
         CoordinatorEntity._handle_coordinator_update(self)
 
     async def async_image(self) -> bytes | None:
-        return (self.coordinator.momentopnamen.get(self._sn) or {}).get("data")
+        b = self._beeld()[1]
+        return b["data"] if b else None
 
     @property
     def extra_state_attributes(self) -> dict:
         m = self.coordinator.momentopnamen.get(self._sn) or {}
         uit = {k: m.get(k) for k in ("reden", "duur_s", "grootte", "fout")}
         uit["bewaard"] = bool(m.get("bewaard"))
+        uit["bron"] = self._beeld()[0]
         return uit

@@ -64,3 +64,12 @@ def momentopname_laden(map_: str | os.PathLike, sn: str) -> dict | None:
         tijd = jpg.stat().st_mtime
     return {"data": data, "tijd": float(tijd), "duur_s": gegevens.get("duur_s"),
             "reden": gegevens.get("reden"), "grootte": len(data), "fout": None, "bewaard": True}
+
+
+def monster_opslaan(map_: str | os.PathLike, sn: str, monster: bytes) -> None:
+    """v0.7.20: de ruwe videodata van een mislukte momentopname (Annex B),
+    zodat te zien is waarom er geen beeld van kwam. Eén bestand per camera."""
+    if not monster:
+        return
+    Path(map_).mkdir(parents=True, exist_ok=True)
+    _schrijf(Path(map_) / f"momentopname_{_veilig(sn)}_mislukt.bin", monster)
