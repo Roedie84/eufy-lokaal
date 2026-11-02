@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.7.21 — accutemperatuur als temperatuur
+
+- Gevonden bij de opschoonronde van 02-11: de drie sensoren *Batterijtemperatuur* (`*_battery_temp`, °C) hadden geen `device_class`. Een parametersensor in °C krijgt nu `temperature`, zodat Home Assistant hem als temperatuur toont en omrekent. Geeft zo'n sensor geen getal, dan is hij onbekend in plaats van een tekst.
+
 ## v0.7.20 — momentopname van de camera's
 
 - Gevonden bij de opschoonronde van 22-10: *Live momentopname* van achtertuin en zolder was sinds 11-10 onbeschikbaar. Er wordt daar nooit aangebeld, dus er kwam nooit een momentopname. De entiteit toont nu het laatste beeld van de HomeBase zolang er geen live beeld is; het attribuut `bron` zegt welk beeld het is (`live` of `laatste beeld (HomeBase)`).

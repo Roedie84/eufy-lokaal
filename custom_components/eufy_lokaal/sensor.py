@@ -412,6 +412,9 @@ class ParameterSensor(_Basis):
         self._sn, self._nummer = sn, nummer
         self._attr_name = parameternaam(nummer)
         self._attr_native_unit_of_measurement = parametereenheid(nummer)
+        # 0.7.21: een temperatuur in °C als temperatuur herkend (opschoonpunt 6).
+        if self._attr_native_unit_of_measurement == "°C":
+            self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_unique_id = f"{sn}_param_{nummer}"
         self._attr_device_info = _station_info(c, sn) if sn in c.stations else _apparaat_info(c, sn)
 
@@ -436,6 +439,8 @@ class ParameterSensor(_Basis):
             return float(w)
         except ValueError:
             pass
+        if getattr(self, "_attr_device_class", None) is not None:
+            return None  # een sensor met device_class moet een getal geven
         return w if len(w) <= 250 else f"{w[:240]}… ({len(w)} tekens)"
 
     @property
