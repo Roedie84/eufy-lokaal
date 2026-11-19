@@ -158,7 +158,9 @@ def test_stuurt_niets_dat_iets_verandert():
     assert code.count("self._stuur_opdracht(") == 1
     assert code.count("opdracht_met_getal(self._volgnr, CMD_CAMERA_INFO") == 1
     assert code.count("opdracht_met_getal(self._volgnr, CMD_STOP_REALTIME_MEDIA") == 1
-    assert code.count("opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD") == 1
+    # v0.13.0: tweede plek = start_download (alleen een opname ophalen; toegestane_payload
+    # laat daar alleen cmd 1024 met een pad op de HomeBase en onze sleutel door)
+    assert code.count("opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD") == 2
     assert code.count("opdracht_met_tekst(self._volgnr, opdracht, tekst") == 1  # live start (gecontroleerd)
     assert code.count("self._verstuur_data(") == 5
 

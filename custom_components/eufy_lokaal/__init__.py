@@ -89,6 +89,30 @@ def _gezichtsdiensten(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "persoon_vergeten", vergeten,
                                  vol.Schema({vol.Required("naam"): cv.string}))
 
+    from homeassistant.core import SupportsResponse
+    from homeassistant.helpers import entity_registry as er
+
+    async def opname_bekijken(call: ServiceCall) -> dict:
+        """v0.13.0: de nieuwste (of een gegeven) opname ophalen en bekijken; geeft de uitkomst terug."""
+        e = er.async_get(hass).async_get(call.data["entity_id"])
+        sn = e.unique_id.rsplit("_", 1)[0] if e and e.platform == DOMAIN else None
+        for c in (hass.data.get(DOMAIN) or {}).values():
+            if sn in getattr(c, "apparaten", {}):
+                uit = await c.async_opname_bekijken(sn, call.data.get("pad"))
+                a = uit.get("analyse")
+                if a:
+                    uit["analyse"] = {**{k: v for k, v in a.items() if k not in ("beeld", "gezichten")},
+                                      "gezichten": [{k: g.get(k) for k in ("naam", "gelijkenis", "gezicht_px",
+                                                                           "zekerheid", "aantal")}
+                                                    for g in a["gezichten"]]}
+                return uit
+        raise HomeAssistantError(f"{call.data['entity_id']} is geen Eufy Lokaal-camera")
+
+    hass.services.async_register(DOMAIN, "opname_bekijken", opname_bekijken,
+                                 vol.Schema({vol.Required("entity_id"): cv.entity_id,
+                                             vol.Optional("pad"): cv.string}),
+                                 supports_response=SupportsResponse.ONLY)
+
 
 def _herstel_entiteit_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Eenmalig: entiteit-ID's opnieuw laten maken zoals Home Assistant dat zelf

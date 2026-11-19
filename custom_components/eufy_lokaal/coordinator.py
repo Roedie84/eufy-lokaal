@@ -241,6 +241,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             nieuw = P2PSessie(sn, station.get("p2p_did", ""), l["ip"], l["poort"], self._cipher_voor(sn), meting,
                               self._bij_bericht_voor(sn))
             nieuw._bij_video = self._bij_video_voor(sn)
+            nieuw._bij_binair = self._bij_binair_voor(sn)
             for stream in self.live.values():  # lopende streams zijn met de oude sessie weg
                 if (self.apparaten.get(stream.sn) or {}).get("station_sn") == sn:
                     stream.stop()
@@ -313,6 +314,17 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 lijst = self.tellingen.setdefault("antwoorden", [])
                 lijst.append({"opdracht": b.get("opdracht"), "code": b.get("returncode"), "t": round(nu)})
                 del lijst[:-8]
+            o = self.__dict__.get("_ophalen", {}).get(station_sn)
+            if o is not None and not o.klaar:
+                # v0.13.0: alles wat tijdens het ophalen van een opname binnenkomt, voor de diagnose
+                if soort == "antwoord" and b.get("opdracht") == 1350 and o.returncode is None \
+                        and nu - o.begin < 5:
+                    o.returncode = b.get("returncode")
+                if b.get("opdracht") in (1303, 1304, 1024):
+                    o.meldingen.append({"opdracht": b.get("opdracht"), "soort": soort,
+                                        "code": b.get("returncode"), "na_s": round(nu - o.begin, 1)})
+                    if b.get("opdracht") == 1304:
+                        o.klaar = True
             if soort in ("ping", "antwoord", "camera_info"):
                 self.async_update_listeners()
                 return
@@ -464,8 +476,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         """Het gebeurtenisbeeld beoordelen; bij een persoon: detectie aan, beeld in het logboek."""
         from homeassistant.util import dt as dt_util
 
-        from .herkenning import beoordeel, teken_vakken
-        from .persoonslog import MAX_PER_CAMERA, beeldtijd_uit_pad, is_vers, opslaan
+        from .herkenning import beoordeel
+        from .persoonslog import beeldtijd_uit_pad, is_vers
 
         t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
         async with self._herken_slot:  # één beeld tegelijk: het rekenwerk mag HA niet bezetten
@@ -503,7 +515,11 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         # v0.11.0: alleen als het gebeurtenisbeeld vers genoeg is dat de persoon er nog kan staan.
         live_zinvol = beeldtijd is not None and nu - beeldtijd < LIVE_ZINVOL_S
         g = await self._async_gezichten(sn, data, personen, honden, live_zinvol)
-        await self._async_meld_persoon(station_sn, sn, g, personen, zekerheid, beeldtijd)
+        moment = await self._async_meld_persoon(station_sn, sn, g, personen, zekerheid, beeldtijd)
+        if not g["gezichten"] and moment is not None and self._opname_automatisch():
+            # v0.13.0: niemand meer in het live beeld: de gezichten uit de opname halen
+            self.hass.async_create_background_task(
+                self._async_namen_uit_opname(station_sn, sn, pad, moment), f"{DOMAIN}_opname_{sn}")
 
     async def _async_meld_persoon(self, station_sn: str, sn: str, g: dict, personen: list[dict],
                                   zekerheid: float | None, beeldtijd: float | None) -> None:
@@ -539,8 +555,73 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                        "gezicht_beeld": self.persoon_url(f"gezicht_{eerste_onbekend}.jpg")
                                        if eerste_onbekend else None,
                                        "bron": "beeldherkenning", "beeldbron": g["bron"], "zekerheid": zekerheid,
-                                       "aantal": len(personen), "hond": bool(honden),
+                                       "aantal": len(personen), "hond": bool(honden), "moment": moment["tijd"],
                                        "beeld": self.persoon_url(moment["bestand"])}, nu)
+        self.async_update_listeners()
+        return moment
+
+    def _opname_automatisch(self) -> bool:
+        """Na drie mislukte pogingen op rij niet meer automatisch (tot een herstart): de
+        HomeBase niet blijven vragen om iets wat hij weigert."""
+        return self.__dict__.get("_opname_fouten_op_rij", 0) < 3
+
+    async def _async_namen_uit_opname(self, station_sn: str, sn: str, thumb_pad: str, moment: dict) -> None:
+        """v0.13.0: de opname bij een persoonsmoment ophalen, gezichten zoeken en de namen
+        nagekomen melden (gebeurtenis soort 'namen', bron 'opname')."""
+        from .bekenden import onbekend_erbij
+        from .opname import opnamepad
+        from .persoonslog import opslaan
+
+        pad = opnamepad(thumb_pad, self.opnames.get(sn) or [])
+        if not pad:
+            return
+        try:
+            uit = await self.async_opname_bekijken(sn, pad)
+        except Exception as err:  # noqa: BLE001
+            uit = {"fout": f"{type(err).__name__}: {err}"}
+        a = uit.get("analyse")
+        t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
+        if a is None:
+            self._opname_fouten_op_rij = self.__dict__.get("_opname_fouten_op_rij", 0) + 1
+            t["opname_mislukt"] = t.get("opname_mislukt", 0) + 1
+            return
+        self._opname_fouten_op_rij = 0
+        t["opname_bekeken"] = t.get("opname_bekeken", 0) + 1
+        nu = time.time()
+        for g in a["gezichten"]:
+            if g["naam"] is None:
+                try:
+                    g["id"] = await self.hass.async_add_executor_job(
+                        onbekend_erbij, self._persoonsmap(), self.bekenden, g["kenmerken"], g["uitsnede"], sn, nu)
+                except OSError as err:
+                    _LOGGER.warning("Onbekend gezicht niet bewaard: %s", err)
+        if any(g.get("id") for g in a["gezichten"]):
+            await self._async_bekenden_bewaren()
+        namen = [g["naam"] for g in a["gezichten"] if g["naam"]]
+        onbekend = [g for g in a["gezichten"] if not g["naam"]]
+        t["gezichten"] = t.get("gezichten", 0) + len(a["gezichten"])
+        t["herkend"] = t.get("herkend", 0) + len(namen)
+        hond = bool(moment.get("hond") or a["hond"])
+        # het logboek bijwerken: namen, hond en het beste beeld uit de opname
+        moment.update(namen=namen, hond=hond)
+        if a["beeld"]:
+            try:
+                nieuw = await self.hass.async_add_executor_job(
+                    opslaan, self._persoonsmap(), sn, moment["tijd"], moment["zekerheid"] or 0, moment["aantal"],
+                    a["beeld"], nu, namen, hond)
+                moment["bestand"] = nieuw
+                self.persoonsbeelden[sn] = {"data": a["beeld"], **moment}
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Beeld uit de opname niet bewaard: %s", err)
+        self.herkenning.setdefault(sn, {}).update({"namen": namen, "onbekend": len(onbekend),
+                                                   "gezichten": len(a["gezichten"]), "beeldbron": "opname"})
+        eerste = onbekend[0].get("id") if onbekend else None
+        self.hass.bus.async_fire(f"{DOMAIN}_gebeurtenis", {
+            "soort": "namen", "bron": "opname", "apparaat_sn": sn, "station_sn": station_sn,
+            "namen": namen, "persoon": " en ".join(namen) or None, "onbekende_gezichten": len(onbekend),
+            "gezicht_id": eerste, "gezicht_beeld": self.persoon_url(f"gezicht_{eerste}.jpg") if eerste else None,
+            "hond": hond, "beeld": self.persoon_url(moment.get("bestand")), "moment": moment["tijd"],
+            "beelden": a["beelden"], "ms": a["ms"]})
         self.async_update_listeners()
 
     async def _async_herken_live(self, sn: str, jpeg: bytes) -> None:
@@ -802,6 +883,99 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                         stream.bij_audio(inhoud)
                     return
         return bij_video
+
+    def _bij_binair_voor(self, station_sn: str):
+        """v0.13.0: frames van een opgehaalde opname (BINARY-kanaal)."""
+        from .p2p_sessie import CMD_VIDEO_FRAME
+        from .video import lees_videoframe
+
+        def bij_binair(kop, inhoud: bytes) -> None:
+            o = self.__dict__.get("_ophalen", {}).get(station_sn)
+            if o is None or o.klaar:
+                return
+            nu = time.time()
+            o.eerste_data = o.eerste_data or nu
+            o.laatste_data = nu
+            o.bytes += len(inhoud)
+            if kop.opdracht != CMD_VIDEO_FRAME:
+                if len(o.meldingen) < 20:
+                    o.meldingen.append({"opdracht": kop.opdracht, "soort": "binair", "lengte": len(inhoud)})
+                return
+            from .opname import MAX_FRAMES
+
+            if len(o.frames) < MAX_FRAMES:
+                f = lees_videoframe(inhoud, kop.versleuteld, o.sleutel)
+                if f is not None:
+                    o.frames.append(f)
+        return bij_binair
+
+    async def async_opname_ophalen(self, sn: str, pad: str, max_s: float = 90.0):
+        """v0.13.0: een opname van de HomeBase ophalen. Geeft het Ophalen-object terug
+        (frames, returncode, meldingen); per station één tegelijk."""
+        from .opname import STIL_S, Ophalen
+        from .p2p_sessie import download_tekst
+        from .video import RsaSleutel
+
+        a = self.apparaten.get(sn) or {}
+        station_sn = a.get("station_sn") or ""
+        s = self.sessies.get(station_sn)
+        if s is None or not s.levend:
+            raise ConnectionError("geen lokale verbinding met de HomeBase")
+        sloten = self.__dict__.setdefault("_ophaal_sloten", {})
+        slot = sloten.setdefault(station_sn, asyncio.Lock())
+        async with slot:
+            sleutel = await self.hass.async_add_executor_job(RsaSleutel)
+            kanaal = int(a.get("device_channel") or 0)
+            o = Ophalen(sn, kanaal, pad, sleutel)
+            self.__dict__.setdefault("_ophalen", {})[station_sn] = o
+            try:
+                s.start_download(kanaal, download_tekst(self._account(station_sn), kanaal, pad, sleutel.publiek_hex()))
+                while not o.klaar:
+                    await asyncio.sleep(0.5)
+                    nu = time.time()
+                    if o.returncode not in (None, 0):
+                        o.fout = f"HomeBase weigert (code {o.returncode})"
+                        break
+                    if o.laatste_data and nu - o.laatste_data > STIL_S:
+                        break
+                    if not o.eerste_data and nu - o.begin > 15:
+                        o.fout = "geen data binnen 15 s"
+                        break
+                    if nu - o.begin > max_s:
+                        o.fout = f"na {max_s:.0f} s afgebroken"
+                        break
+            except Exception as err:  # noqa: BLE001
+                o.fout = f"{type(err).__name__}: {err}"
+            finally:
+                o.klaar = True
+                t = self.tellingen.setdefault("opnames_opgehaald", {"pogingen": 0, "gelukt": 0, "laatste": None})
+                t["pogingen"] += 1
+                t["gelukt"] += 1 if o.frames else 0
+                t["laatste"] = o.samenvatting()
+            return o
+
+    async def async_opname_bekijken(self, sn: str, pad: str | None = None) -> dict:
+        """v0.13.0: een opname ophalen en analyseren (dienst eufy_lokaal.opname_bekijken en
+        automatisch na een persoon). Zonder pad: de nieuwste opname van de camera."""
+        from .opname import analyseer
+
+        if not pad:
+            r = next((r for r in self.opnames.get(sn) or [] if r.get("storage_path")), None)
+            pad = r.get("storage_path") if r else None
+        if not pad:
+            return {"fout": "geen opname bekend"}
+        o = await self.async_opname_ophalen(sn, pad)
+        uit = {"ophalen": o.samenvatting()}
+        if not o.frames:
+            return uit
+        async with self._herken_slot:
+            try:
+                a = await self.hass.async_add_executor_job(analyseer, o.frames, self.bekenden["personen"])
+            except Exception as err:  # noqa: BLE001
+                uit["fout"] = f"analyse: {type(err).__name__}: {err}"
+                return uit
+        uit["analyse"] = a
+        return uit
 
     def stream_url(self, apparaat_sn: str) -> str:
         poort = getattr(getattr(self.hass, "http", None), "server_port", None) or 8123

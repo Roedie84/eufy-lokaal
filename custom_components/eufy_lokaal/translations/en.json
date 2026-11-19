@@ -64,6 +64,20 @@
           "description": "Wie vergeten moet worden."
         }
       }
+    },
+    "opname_bekijken": {
+      "name": "Opname bekijken",
+      "description": "Haalt de nieuwste (of een gegeven) opname lokaal van de HomeBase en zoekt er personen, gezichten en de hond in.",
+      "fields": {
+        "entity_id": {
+          "name": "Camera",
+          "description": "De camera."
+        },
+        "pad": {
+          "name": "Pad",
+          "description": "Pad van de opname op de HomeBase (leeg = nieuwste)."
+        }
+      }
     }
   }
 }

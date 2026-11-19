@@ -20,3 +20,15 @@ persoon_vergeten:
       required: true
       selector:
         text:
+opname_bekijken:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: eufy_lokaal
+          domain: camera
+    pad:
+      required: false
+      selector:
+        text:

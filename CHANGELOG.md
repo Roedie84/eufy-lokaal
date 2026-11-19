@@ -1,5 +1,13 @@
 # Changelog — Eufy Lokaal
 
+## v0.13.0 — gezichten uit de opname
+
+- Gevonden 19-11: wie in de achtertuin voorbij loopt, is al weg als het live beeld er is (10-15 s na de start van de opname; 4 van 4 keer niemand meer in beeld). Nu haalt de integratie na een persoon zonder gezicht de opname zelf lokaal van de HomeBase (dezelfde videoframes als de livestream, op het BINARY-kanaal, versleuteld met een eigen sleutel), neemt er 2 beelden per seconde uit (hooguit 30) en zoekt daarin personen, gezichten en de hond. Gezichten die op elkaar lijken tellen als één persoon; per persoon het grootste, scherpste gezicht.
+- De namen komen 'na': eerst de gewone persoonsgebeurtenis, daarna de gebeurtenis `namen` (bron `opname`) met `namen`, `gezicht_id`/`gezicht_beeld` van een onbekend gezicht, `hond` en `moment` (zelfde als in de persoonsgebeurtenis). Het logboek krijgt de namen en het beste beeld uit de opname.
+- Nieuwe dienst `eufy_lokaal.opname_bekijken` (camera, optioneel pad): haalt de nieuwste opname op en geeft de uitkomst terug (ophalen + analyse), om te testen.
+- Let op: eufy-security-client meldt dat de HomeBase 3 deze opdracht weigerde (-104) met het oude protocol. Weigert hij hier ook, dan stopt het automatisch ophalen na drie keer op rij (tot een herstart) en blijft alles verder zoals het was; de uitkomst staat in de diagnostiek onder `opnames_opgehaald`.
+- Alleen lezen: de nieuwe opdracht (CMD_SET_PAYLOAD met cmd 1024) mag alleen een pad op de HomeBase en onze sleutel bevatten; wissen of iets anders kan er niet mee.
+
 ## v0.12.0 — wandelen met de hond
 
 - Nieuwe sensor *Wandelingen met de hond vandaag* (Eufy Lokaal). Afgeleid uit het logboek van alle camera's (Ruud 19-11: meestal via de achtertuin): de hond met iemand gezien, daarna 4 minuten tot 3 uur geen hond, dan de hond terug = een wandeling. Korte wandelingen tellen mee (bij regen soms 5 minuten). Wie: de herkende namen bij vertrek en terugkomst samen.

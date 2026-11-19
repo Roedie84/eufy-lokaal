@@ -88,6 +88,10 @@ CMD_DOORBELL_SET_PAYLOAD = 1700
 COMMAND_START_LIVESTREAM = 1000
 CMD_VIDEO_FRAME = 1300
 CMD_AUDIO_FRAME = 1301
+# v0.13.0: een opname ophalen (alleen lezen; de HomeBase stuurt de frames als BINARY)
+CMD_DOWNLOAD_VIDEO = 1024
+CMD_CONVERT_MP4_OK = 1303
+CMD_DOWNLOAD_FINISH = 1304
 # Stap 5: alleen opvragen uit de database van de HomeBase, nooit wissen.
 DATABASE_VRAGEN = frozenset({10006, 10013, 10017})  # opnames per datum, laatste info, opnames lokaal
 
@@ -172,7 +176,20 @@ def toegestane_payload(j: Any) -> bool:
         return isinstance(p, list) and len(p) == 1 and set(p[0]) == {"file"} and isinstance(p[0]["file"], str)
     if j.get("cmd") == CMD_START_REALTIME_MEDIA:
         return isinstance(p, dict)
+    if j.get("cmd") == CMD_DOWNLOAD_VIDEO:
+        # alleen ophalen: een pad op de schijf van de HomeBase en onze publieke sleutel
+        return (isinstance(p, dict) and set(p) == {"filepath", "key"} and isinstance(p["filepath"], str)
+                and p["filepath"].startswith("/zx/") and ".." not in p["filepath"] and isinstance(p["key"], str))
     return False
+
+
+def download_tekst(account_id: str, kanaal: int, pad: str, sleutel_hex: str) -> str:
+    """v0.13.0: een opname ophalen, zoals eufy-security-client het voor de HomeBase 3 probeert
+    (Station.startDownload, HB3-tak): CMD_SET_PAYLOAD met cmd 1024, het pad en onze publieke
+    RSA-modulus (hex, hoofdletters)."""
+    return json.dumps({"account_id": account_id, "cmd": CMD_DOWNLOAD_VIDEO, "mChannel": kanaal,
+                       "mValue3": CMD_DOWNLOAD_VIDEO, "payload": {"filepath": pad, "key": sleutel_hex.upper()}},
+                      separators=(",", ":"))
 
 
 def toegestane_deurbel_payload(j: Any) -> bool:
@@ -449,6 +466,7 @@ class P2PSessie:
         self._rij: list[tuple[str, str]] = []
         self._wachtrij: dict[int, dict[int, bytes]] = {}
         self._bij_video: Callable[[DataKop, bytes], None] | None = None
+        self._bij_binair: Callable[[DataKop, bytes], None] | None = None  # v0.13.0: opnames
         self._vraag_bezig: float | None = None
 
     def _stuur(self, data: bytes, adres) -> None:
@@ -592,6 +610,15 @@ class P2PSessie:
                                                self.meting.niveau, kanaal))
         self.meting.opdrachten_gestuurd["live_start"] = self.meting.opdrachten_gestuurd.get("live_start", 0) + 1
 
+    def start_download(self, kanaal: int, tekst: str) -> None:
+        """v0.13.0: een opname laten sturen (alleen lezen)."""
+        if self._transport is None or self._adres is None or self.sleutel is None:
+            raise ConnectionError("geen versleutelde lokale verbinding")
+        self._bouwer.pop(SOORT_BINARY, None)
+        self._verstuur_data(opdracht_met_tekst(self._volgnr, CMD_SET_PAYLOAD, tekst, self.sleutel,
+                                               self.meting.niveau, kanaal))
+        self.meting.opdrachten_gestuurd["opname"] = self.meting.opdrachten_gestuurd.get("opname", 0) + 1
+
     def stop_live(self, kanaal: int) -> None:
         if self._transport is None or self._adres is None:
             return
@@ -683,15 +710,24 @@ class P2PSessie:
 
     def _verwerk_data(self, soort: int, volgnr: int, data: bytes) -> None:
         self._verwacht[soort] = (volgnr + 1) % 0x10000
-        if soort not in (SOORT_DATA, SOORT_CONTROL, SOORT_VIDEO):
+        if soort not in (SOORT_DATA, SOORT_CONTROL, SOORT_VIDEO, SOORT_BINARY):
             self.meting.data_pakket(data, f"soort {soort} overgeslagen")
-            return  # bestanden (BINARY): latere stap
+            return
         bouwer = self._bouwer.setdefault(soort, Bouwer())
         klaar = bouwer.voeg_toe(data[8:])
         if soort != SOORT_VIDEO:
             self.meting.data_pakket(
             data, f"{len(klaar)} bericht(en)" if klaar else ("deel" if bouwer.kop else "geen XZYH-kop"))
         for kop, inhoud in klaar:
+            if soort == SOORT_BINARY:
+                # v0.13.0: frames van een opgehaalde opname
+                self.meting.binair = getattr(self.meting, "binair", 0) + 1
+                if self._bij_binair is not None:
+                    try:
+                        self._bij_binair(kop, inhoud)
+                    except Exception as err:  # noqa: BLE001
+                        self.meting.laatste_fout = f"opname: {type(err).__name__}: {err}"
+                continue
             if soort == SOORT_VIDEO:
                 if self._bij_video is not None:
                     try:
@@ -795,4 +831,5 @@ class P2PSessie:
             "sleutel_bron": m.sleutel_bron,
             "opdrachten_gestuurd": m.opdrachten_gestuurd,
             "sleutel_pogingen": m.sleutel_pogingen,
+            "binair": getattr(m, "binair", 0),
         }
