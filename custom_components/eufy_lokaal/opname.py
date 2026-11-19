@@ -19,6 +19,8 @@ MAX_FRAMES = 3000       # hooguit ~2 min bij 25 fps
 BEELDEN_PER_S = 2.0     # zoveel beelden per seconde video beoordelen
 MAX_BEELDEN = 30
 ZELFDE_PERSOON = 0.5    # gezichten in één opname die zo veel lijken: dezelfde persoon
+MIN_FRONTAAL = 0.6      # v0.13.1: alleen gezichten (bijna) recht van voren
+MIN_BELICHTING = 0.6    # v0.13.1: geen wit uitgebeten of te donkere gezichten
 
 
 @dataclass
@@ -126,18 +128,24 @@ def analyseer(frames: list, bekend: dict[str, list[list[float]]]) -> dict:
             beste = (len(u["personen"]), z, jpeg, u["personen"], u.get("honden") or [])
         for g in gezichten_in(jpeg, u["personen"], bekend):
             gezichten.append(g)
-    # per persoon samenvoegen: het grootste, zekerste gezicht houden
+    # v0.13.1: alleen bruikbare gezichten (recht van voren, goed belicht); per persoon het
+    # beste houden, en nooit meer gezichten dan er tegelijk personen in beeld waren. Op 19-11
+    # gaf één persoon die voorbij liep anders 4 'personen' (van opzij, overbelicht, onscherp).
+    bruikbaar = [g for g in gezichten
+                 if g.get("frontaal", 1) >= MIN_FRONTAAL and g.get("belichting", 1) >= MIN_BELICHTING]
     groepen: list[dict] = []
-    for g in sorted(gezichten, key=lambda g: g["gezicht_px"] * g["zekerheid"], reverse=True):
+    for g in sorted(bruikbaar, key=lambda g: g.get("kwaliteit", g["gezicht_px"] * g["zekerheid"]), reverse=True):
         v = np.asarray(g["kenmerken"])
         for gr in groepen:
             if float(np.asarray(gr["kenmerken"]) @ v) >= ZELFDE_PERSOON:
                 gr["aantal"] += 1
                 break
         else:
-            groepen.append({**g, "aantal": 1})
+            if len(groepen) < max(1, max_personen):
+                groepen.append({**g, "aantal": 1})
     for gr in groepen:
         gr["naam"], gr["gelijkenis"] = vergelijk(np.asarray(gr["kenmerken"]), bekend)
     beeld = teken_vakken(beste[2], beste[3], beste[4]) if beste else None
     return {"beelden": len(beelden), "personen": max_personen, "hond": honden, "gezichten": groepen,
+            "gezichten_gezien": len(gezichten), "gezichten_bruikbaar": len(bruikbaar),
             "beeld": beeld, "ms": round((time.perf_counter() - begin) * 1000)}

@@ -93,20 +93,20 @@ def test_beelden_uit_een_opname():
     assert op.beelden_uit([]) == []
 
 
-def test_analyse_vindt_beide_gezichten_een_keer():
+def test_analyse_houdt_alleen_het_bruikbare_gezicht_een_keer():
     from custom_components.eufy_lokaal import gezichten as gz
 
+    # in het testbeeld kijkt de linker persoon opzij (frontaal 0): die telt niet als gezicht
     frames = _opname(BEELD, aantal=12, fps=6)
     a = op.analyseer(frames, {})
     assert a["personen"] == 2 and a["beelden"] >= 3 and not a["hond"]
-    # per persoon één gezicht, ook al stond hij in elk beeld
-    assert len(a["gezichten"]) == 2 and all(g["aantal"] >= 3 for g in a["gezichten"])
-    assert a["beeld"][:2] == b"\xff\xd8"
-    # met één ingeleerd: die wordt herkend, de ander niet
-    v1 = a["gezichten"][0]["kenmerken"]
-    b = op.analyseer(frames, {"Ruud": [v1]})
-    assert sorted(g["naam"] or "-" for g in b["gezichten"]) == ["-", "Ruud"]
-    assert gz.MIN_GEZICHT_PX <= min(g["gezicht_px"] for g in a["gezichten"])
+    assert a["gezichten_gezien"] >= 2 * a["beelden"] - 1 and a["gezichten_bruikbaar"] >= a["beelden"] - 1
+    assert len(a["gezichten"]) == 1 and a["gezichten"][0]["aantal"] >= 3
+    assert a["gezichten"][0]["frontaal"] >= op.MIN_FRONTAAL and a["beeld"][:2] == b"\xff\xd8"
+    # ingeleerd: herkend
+    b = op.analyseer(frames, {"Ruud": [a["gezichten"][0]["kenmerken"]]})
+    assert [g["naam"] for g in b["gezichten"]] == ["Ruud"]
+    assert gz.MIN_GEZICHT_PX <= a["gezichten"][0]["gezicht_px"]
 
 
 # coördinator -----------------------------------------------------------------------
@@ -153,7 +153,7 @@ def test_opname_ophalen_en_bekijken(tmp_path):
     assert o["frames"] == len(frames) and o["returncode"] == 0 and o["klaar"] and o["fout"] is None
     assert any(m["opdracht"] == 1304 for m in o["meldingen"])
     assert c.sessies[STATION].teksten[0]["payload"]["filepath"] == pad
-    assert len(uit["analyse"]["gezichten"]) == 2
+    assert len(uit["analyse"]["gezichten"]) == 1
     assert c.tellingen["opnames_opgehaald"]["gelukt"] == 1
 
 
@@ -171,16 +171,15 @@ def test_namen_nagekomen_uit_de_opname(tmp_path):
     c.personen[TUIN] = [moment]
     asyncio.run(c._async_namen_uit_opname(STATION, TUIN, _pad(time.time() - 20), moment))
     data = c.hass.bus.async_fire.call_args[0][1]
-    assert data["soort"] == "namen" and data["bron"] == "opname" and data["onbekende_gezichten"] == 2
+    assert data["soort"] == "namen" and data["bron"] == "opname" and data["onbekende_gezichten"] == 1
     assert data["gezicht_id"] in c.bekenden["onbekend"] and data["moment"] == moment["tijd"]
     assert moment["bestand"] and c.persoonsbeelden[TUIN]["data"][:2] == b"\xff\xd8"
     # inleren en nog eens: nu met naam
-    for i, naam in zip(list(c.bekenden["onbekend"]), ["Ruud", "Jill"]):
-        asyncio.run(c.async_gezicht_inleren(i, naam))
+    asyncio.run(c.async_gezicht_inleren(data["gezicht_id"], "Ruud"))
     c.sessies[STATION] = _NepSessie(c, frames)
     asyncio.run(c._async_namen_uit_opname(STATION, TUIN, _pad(time.time() - 20), moment))
     data = c.hass.bus.async_fire.call_args[0][1]
-    assert sorted(data["namen"]) == ["Jill", "Ruud"] and sorted(c.personen[TUIN][0]["namen"]) == ["Jill", "Ruud"]
+    assert data["namen"] == ["Ruud"] and c.personen[TUIN][0]["namen"] == ["Ruud"] and data["gezicht_id"] is None
 
 
 def test_na_drie_mislukte_opnames_niet_meer_automatisch(tmp_path):
@@ -190,3 +189,54 @@ def test_na_drie_mislukte_opnames_niet_meer_automatisch(tmp_path):
         assert c._opname_automatisch()
         asyncio.run(c._async_namen_uit_opname(STATION, TUIN, _pad(time.time()), moment))
     assert not c._opname_automatisch()
+
+
+def test_frontaal_en_belichting():
+    from custom_components.eufy_lokaal import gezichten as gz
+
+    recht = gz.SJABLOON.tolist()
+    assert gz.frontaal(recht, [20, 30, 92, 110]) > 0.9
+    opzij = [[40, 50], [55, 50], [38, 72], [42, 92], [52, 92]]        # neus naast de ogen, ogen dicht bij elkaar
+    assert gz.frontaal(opzij, [20, 30, 92, 110]) < 0.3
+    assert gz.belichting(Image.new("RGB", (112, 112), (250, 250, 250))) == 0.0
+    assert gz.belichting(Image.new("RGB", (112, 112), (120, 110, 100))) == 1.0
+
+
+def test_een_persoon_in_beeld_geeft_hooguit_een_gezicht(monkeypatch):
+    # twee personen in beeld, maar stel dat er maar één persoon was: dan één gezicht
+    from custom_components.eufy_lokaal import herkenning as h
+
+    echt = h.beoordeel
+
+    def een_persoon(jpeg, *a):
+        u = echt(jpeg, *a)
+        return {**u, "personen": u["personen"][:1]}
+
+    monkeypatch.setattr(h, "beoordeel", een_persoon)
+    a = op.analyseer(_opname(BEELD, aantal=8, fps=4), {})
+    assert a["personen"] == 1 and len(a["gezichten"]) == 1
+
+
+def test_frontaal_en_belichting():
+    from custom_components.eufy_lokaal import gezichten as gz
+
+    recht = gz.SJABLOON.tolist()
+    assert gz.frontaal(recht, [20, 30, 92, 110]) > 0.9
+    opzij = [[40, 50], [55, 50], [38, 72], [42, 92], [52, 92]]        # neus naast de ogen, ogen dicht bij elkaar
+    assert gz.frontaal(opzij, [20, 30, 92, 110]) < 0.3
+    assert gz.belichting(Image.new("RGB", (112, 112), (250, 250, 250))) == 0.0
+    assert gz.belichting(Image.new("RGB", (112, 112), (120, 110, 100))) == 1.0
+
+
+def test_een_persoon_in_beeld_geeft_hooguit_een_gezicht(monkeypatch):
+    from custom_components.eufy_lokaal import herkenning as h
+
+    echt = h.beoordeel
+
+    def een_persoon(jpeg, *a):
+        u = echt(jpeg, *a)
+        return {**u, "personen": u["personen"][:1]}
+
+    monkeypatch.setattr(h, "beoordeel", een_persoon)
+    a = op.analyseer(_opname(BEELD, aantal=8, fps=4), {})
+    assert a["personen"] == 1 and len(a["gezichten"]) == 1

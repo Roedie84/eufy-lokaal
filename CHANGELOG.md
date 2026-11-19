@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.13.1 — alleen bruikbare gezichten uit de opname
+
+- Eerste echte proef 19-11 16:47: de HomeBase stuurt de opnames (625 videoberichten, twee keer CMD_DOWNLOAD_FINISH) en er kwamen gezichten uit, maar één persoon die voorbij liep gaf vier 'gezichten': één goed, drie van opzij, overbelicht of half. Nu telt een gezicht alleen als het (bijna) recht van voren is (neus tussen de ogen, ogen niet te dicht bij elkaar) en niet wit uitgebeten of te donker, en komen er nooit meer gezichten uit een opname dan er tegelijk personen in beeld waren. Per gezicht nieuwe waarden `frontaal`, `belichting` en `kwaliteit`; de analyse meldt `gezichten_gezien` en `gezichten_bruikbaar`.
+
 ## v0.13.0 — gezichten uit de opname
 
 - Gevonden 19-11: wie in de achtertuin voorbij loopt, is al weg als het live beeld er is (10-15 s na de start van de opname; 4 van 4 keer niemand meer in beeld). Nu haalt de integratie na een persoon zonder gezicht de opname zelf lokaal van de HomeBase (dezelfde videoframes als de livestream, op het BINARY-kanaal, versleuteld met een eigen sleutel), neemt er 2 beelden per seconde uit (hooguit 30) en zoekt daarin personen, gezichten en de hond. Gezichten die op elkaar lijken tellen als één persoon; per persoon het grootste, scherpste gezicht.

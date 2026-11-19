@@ -127,6 +127,30 @@ def vergelijk(v: np.ndarray, bekend: dict[str, list[list[float]]], drempel: floa
     return (beste if waarde >= drempel else None), round(waarde, 3)
 
 
+def frontaal(punten, vak) -> float:
+    """v0.13.1: hoe recht van voren (0..1), uit de vijf punten. Van opzij staat de neus niet
+    tussen de ogen en liggen de ogen dicht bij elkaar ten opzichte van het gezicht."""
+    p = np.asarray(punten, dtype=np.float64)
+    ogen = p[1] - p[0]
+    afstand = float(np.hypot(*ogen))
+    breed = max(1.0, float(vak[2] - vak[0]))
+    if afstand < 1:
+        return 0.0
+    as_ = ogen / afstand
+    midden = (p[0] + p[1]) / 2
+    scheef = abs(float((p[2] - midden) @ as_)) / afstand       # 0 = neus precies tussen de ogen
+    verhouding = afstand / breed                                # ~0,4 recht van voren, < 0,2 van opzij
+    return round(max(0.0, 1 - scheef / 0.45) * min(1.0, max(0.0, (verhouding - 0.15) / 0.2)), 3)
+
+
+def belichting(gezicht) -> float:
+    """v0.13.1: 1 = goed belicht; lager bij overbelicht of te donker (wit uitgebeten gezicht)."""
+    g = np.asarray(gezicht.convert("L"), dtype=np.float32)[16:96, 16:96]
+    wit = float((g > 245).mean())
+    zwart = float((g < 15).mean())
+    return round(max(0.0, 1 - 2.5 * max(wit, zwart)), 3)
+
+
 def gezichten_in(jpeg: bytes, personen: list[dict], bekend: dict[str, list[list[float]]]) -> list[dict]:
     """Per persoonsvak (0..1) het gezicht: naam of None, gelijkenis, kenmerken en een uitsnede.
     Personen zonder bruikbaar gezicht (rug naar de camera, te klein) worden overgeslagen."""
@@ -151,11 +175,15 @@ def gezichten_in(jpeg: bytes, personen: list[dict], bekend: dict[str, list[list[
         g = max(gevonden, key=lambda g: (g["vak"][2] - g["vak"][0]) * g["zekerheid"])
         punten = np.asarray(g["punten"]) + np.array(kader[:2])
         recht = recht_zetten(beeld, punten)
+        voor = frontaal(g["punten"], g["vak"])
+        licht = belichting(recht)
         v = kenmerken(recht)
         naam, gelijkenis = vergelijk(v, bekend)
         buf = io.BytesIO()
         recht.save(buf, "JPEG", quality=90)
         uit.append({"naam": naam, "gelijkenis": gelijkenis, "kenmerken": [round(float(a), 5) for a in v],
                     "gezicht_px": round(g["vak"][2] - g["vak"][0]), "zekerheid": g["zekerheid"],
+                    "frontaal": voor, "belichting": licht,
+                    "kwaliteit": round(voor * licht * g["zekerheid"] * min(1.0, (g["vak"][2] - g["vak"][0]) / 80), 3),
                     "uitsnede": buf.getvalue()})
     return uit

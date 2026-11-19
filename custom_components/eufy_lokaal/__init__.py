@@ -103,7 +103,8 @@ def _gezichtsdiensten(hass: HomeAssistant) -> None:
                 if a:
                     uit["analyse"] = {**{k: v for k, v in a.items() if k not in ("beeld", "gezichten")},
                                       "gezichten": [{k: g.get(k) for k in ("naam", "gelijkenis", "gezicht_px",
-                                                                           "zekerheid", "aantal")}
+                                                                           "zekerheid", "aantal", "frontaal",
+                                                                           "belichting", "kwaliteit")}
                                                     for g in a["gezichten"]]}
                 return uit
         raise HomeAssistantError(f"{call.data['entity_id']} is geen Eufy Lokaal-camera")
