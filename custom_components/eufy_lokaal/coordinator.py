@@ -34,6 +34,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+LIVE_ZINVOL_S = 90      # v0.11.0: is het gebeurtenisbeeld ouder, dan staat de persoon er meestal niet meer
+LIVE_DUBBEL_S = 120     # na een persoon uit het live beeld (aanbellen) het gebeurtenisbeeld niet nog eens melden
+
 
 def prive_ip(ip) -> bool:
     """Alleen thuisnetadressen (de cloud geeft in `ip_addr` het publieke IP)."""
@@ -435,12 +438,19 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
 
     # v0.8.0: persoonsherkenning ---------------------------------------------------------
 
-    def herkent(self, sn: str) -> bool:
-        """Beeldherkenning voor elke camera behalve de deurbel (keuze 19-11)."""
-        from .gebeurtenissen import is_deurbel
+    def kan_herkennen(self, sn: str) -> bool:
+        """Elke camera (geen station) kan meedoen; de entiteiten bestaan dan altijd."""
+        return sn in self.apparaten and sn not in self.stations
 
-        a = self.apparaten.get(sn)
-        return bool(a) and sn not in self.stations and not is_deurbel(a)
+    def herkent(self, sn: str) -> bool:
+        """v0.11.0: beeldherkenning voor elke camera, ook de deurbel (Ruud 19-11), tenzij de
+        schakelaar *Beeldherkenning* van die camera uit staat."""
+        return self.kan_herkennen(sn) and sn not in self.__dict__.get("herkenning_uit", set())
+
+    def zet_herkenning(self, sn: str, aan: bool) -> None:
+        uit = self.__dict__.setdefault("herkenning_uit", set())
+        (uit.discard if aan else uit.add)(sn)
+        self.async_update_listeners()
 
     def _persoonsmap(self) -> str:
         from .persoonslog import SUBMAP
@@ -483,16 +493,31 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         if not personen:
             await self._async_alleen_hond(station_sn, sn, data, honden, beeldtijd, nu)
             return
+        if nu - self.__dict__.get("_live_persoon", {}).get(sn, 0) < LIVE_DUBBEL_S:
+            # al gemeld vanuit het live beeld bij aanbellen: niet nog eens
+            self.herkenning[sn]["al_gemeld"] = True
+            self.async_update_listeners()
+            return
         t["met_persoon"] += 1
-        # v0.9.0: wie is het? Live beeld (scherper) en gezichten vergelijken met de bekenden
-        g = await self._async_gezichten(sn, data, personen, honden)
+        # v0.9.0: wie is het? Live beeld (scherper) en gezichten vergelijken met de bekenden.
+        # v0.11.0: alleen als het gebeurtenisbeeld vers genoeg is dat de persoon er nog kan staan.
+        live_zinvol = beeldtijd is not None and nu - beeldtijd < LIVE_ZINVOL_S
+        g = await self._async_gezichten(sn, data, personen, honden, live_zinvol)
+        await self._async_meld_persoon(station_sn, sn, g, personen, zekerheid, beeldtijd)
+
+    async def _async_meld_persoon(self, station_sn: str, sn: str, g: dict, personen: list[dict],
+                                  zekerheid: float | None, beeldtijd: float | None) -> None:
+        """Detectie aan, beeld (met kaders) in het logboek en de gebeurtenis met namen."""
+        from .herkenning import teken_vakken
+        from .persoonslog import MAX_PER_CAMERA, opslaan
+
         bron_beeld, vakken, honden = g["beeld"], g["vakken"], g["honden"]
         if honden:
             self.detecties.setdefault(sn, {})["huisdier"] = time.time()
         namen = [x["naam"] for x in g["gezichten"] if x["naam"]]
         onbekend = [x for x in g["gezichten"] if not x["naam"]]
-        self.herkenning[sn].update({"namen": namen, "onbekend": len(onbekend), "gezichten": len(g["gezichten"]),
-                                    "beeldbron": g["bron"]})
+        self.herkenning.setdefault(sn, {}).update({"namen": namen, "onbekend": len(onbekend),
+                                                   "gezichten": len(g["gezichten"]), "beeldbron": g["bron"]})
         nu = time.time()
         moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": len(personen), "bestand": None,
                   "namen": namen, "hond": bool(honden)}
@@ -518,6 +543,26 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                        "beeld": self.persoon_url(moment["bestand"])}, nu)
         self.async_update_listeners()
 
+    async def _async_herken_live(self, sn: str, jpeg: bytes) -> None:
+        """v0.11.0: een live beeld (bij aanbellen) beoordelen: persoon, gezichten en melding."""
+        from .herkenning import beoordeel
+
+        station_sn = (self.apparaten.get(sn) or {}).get("station_sn") or ""
+        try:
+            async with self._herken_slot:
+                u = await self.hass.async_add_executor_job(beoordeel, jpeg)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Live beeld van %s niet beoordeeld: %s", sn, err)
+            return
+        if not u["personen"]:
+            return
+        self.__dict__.setdefault("_live_persoon", {})[sn] = time.time()
+        t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
+        t["met_persoon"] += 1
+        g = await self._async_gezichten(sn, jpeg, u["personen"], u.get("honden") or [], live=jpeg)
+        await self._async_meld_persoon(station_sn, sn, g, u["personen"],
+                                       max(p["zekerheid"] for p in u["personen"]), time.time())
+
     async def _async_alleen_hond(self, station_sn: str, sn: str, data: bytes, honden: list[dict],
                                  beeldtijd: float | None, nu: float) -> None:
         """v0.10.0: een hond zonder persoon: detectie Huisdier, beeld in het logboek, gebeurtenis 'hond'."""
@@ -542,10 +587,14 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     async def _async_gezichten(self, sn: str, data: bytes, personen: list[dict],
-                               honden: list[dict] | None = None) -> dict:
+                               honden: list[dict] | None = None, live_zinvol: bool = True,
+                               live: bytes | None = None) -> dict:
         """Live momentopname (de camera is door de beweging toch wakker; 1920x1080 tegen 640x360
         van het gebeurtenisbeeld), daarop opnieuw de personen en per persoon het gezicht.
-        Lukt het live beeld niet, dan het gebeurtenisbeeld. Fouten raken de detectie niet."""
+        v0.11.0: gezichten ALLEEN uit het live beeld. Uit het gebeurtenisbeeld (640x360) kwamen
+        vlekken die op een gezicht leken (19-11). Zonder bruikbaar live beeld: alleen 'persoon'.
+        Met 'live' (bij aanbellen al opgehaald) wordt geen nieuwe momentopname gevraagd.
+        Fouten raken de detectie niet."""
         from .bekenden import onbekend_erbij
         from .gezichten import gezichten_in
         from .herkenning import beoordeel
@@ -554,17 +603,21 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         uit = {"bron": "gebeurtenisbeeld", "beeld": data, "vakken": personen, "honden": list(honden or []),
                "gezichten": []}
         try:
-            if await asyncio.wait_for(self.async_momentopname(sn, "persoon"), 25):
+            if live is None and live_zinvol and await asyncio.wait_for(self.async_momentopname(sn, "persoon"), 25):
                 live = (self.momentopnamen.get(sn) or {}).get("data")
-                if live:
-                    async with self._herken_slot:
-                        u = await self.hass.async_add_executor_job(beoordeel, live)
-                    if u["personen"]:
-                        uit.update(bron="live", beeld=live, vakken=u["personen"],
-                                   honden=u.get("honden") or uit["honden"])
+            if live:
+                async with self._herken_slot:
+                    u = await self.hass.async_add_executor_job(beoordeel, live)
+                if u["personen"]:
+                    uit.update(bron="live", beeld=live, vakken=u["personen"],
+                               honden=u.get("honden") or uit["honden"])
+                else:
+                    t["live_niemand"] = t.get("live_niemand", 0) + 1
         except Exception as err:  # noqa: BLE001 - zonder live beeld verder met het gebeurtenisbeeld
             t["live_mislukt"] = t.get("live_mislukt", 0) + 1
             _LOGGER.debug("Geen live beeld van %s voor de gezichten: %s", sn, err)
+        if uit["bron"] != "live":
+            return uit
         try:
             async with self._herken_slot:
                 gevonden = await self.hass.async_add_executor_job(
@@ -639,7 +692,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             self.bekenden = await self.hass.async_add_executor_job(bekenden_laden, map_)
             await self.hass.async_add_executor_job(opruimen, map_, time.time())
             for sn in self.apparaten:
-                if not self.herkent(sn):
+                if not self.kan_herkennen(sn):
                     continue
                 momenten = await self.hass.async_add_executor_job(lijst, map_, sn)
                 self.personen[sn] = [{k: m.get(k) for k in ("tijd", "zekerheid", "aantal", "bestand", "namen", "hond")}
@@ -934,6 +987,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.momentopnamen[sn] = {"data": jpeg, "tijd": time.time(), "duur_s": round(time.time() - begin, 1),
                                   "reden": reden, "grootte": len(jpeg), "fout": None}
         await self._async_momentopname_bewaren(sn)
+        if reden == "aangebeld" and self.herkent(sn):
+            # v0.11.0: wie staat er voor de deur? Het live beeld is er toch al.
+            self.hass.async_create_background_task(self._async_herken_live(sn, jpeg),
+                                                   f"{DOMAIN}_herken_aanbellen_{sn}")
         self.hass.bus.async_fire(f"{DOMAIN}_momentopname", {"apparaat_sn": sn, "gelukt": True, "reden": reden})
         self.async_update_listeners()
         return True

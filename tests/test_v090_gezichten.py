@@ -263,11 +263,52 @@ def test_na_inleren_wordt_de_naam_herkend(tmp_path):
     assert asyncio.run(c.async_persoon_vergeten("jill")) and c.bekenden["personen"].keys() == {"Ruud"}
 
 
-def test_zonder_live_beeld_verder_met_het_gebeurtenisbeeld(tmp_path):
+def test_zonder_live_beeld_wel_persoon_maar_geen_gezichten(tmp_path):
+    # v0.11.0: uit het gebeurtenisbeeld kwamen vlekken als 'gezicht' (19-11)
     c = _coordinator(tmp_path, live=None)
     _draai(c)
     data = c.hass.bus.async_fire.call_args[0][1]
-    assert data["beeldbron"] == "gebeurtenisbeeld" and data["onbekende_gezichten"] == 2
+    assert data["beeldbron"] == "gebeurtenisbeeld" and data["onbekende_gezichten"] == 0
+    assert data["soort"] == "onbekend_persoon" and c.bekenden["onbekend"] == {}
+
+
+def test_live_beeld_zonder_persoon_geeft_geen_gezichten(tmp_path):
+    import io as _io
+
+    leeg = _io.BytesIO()
+    Image.new("RGB", (1920, 1080), (90, 110, 80)).save(leeg, "JPEG")
+    c = _coordinator(tmp_path, live=leeg.getvalue())
+    _draai(c)
+    data = c.hass.bus.async_fire.call_args[0][1]
+    assert data["beeldbron"] == "gebeurtenisbeeld" and data["onbekende_gezichten"] == 0
+    assert c.tellingen["herkenning"]["live_niemand"] == 1
+
+
+def test_oud_gebeurtenisbeeld_vraagt_geen_live_beeld(tmp_path):
+    from datetime import datetime
+    from unittest.mock import patch
+
+    c = _coordinator(tmp_path, live=BEELD)
+    with patch("homeassistant.util.dt.get_default_time_zone", return_value=datetime.now().astimezone().tzinfo):
+        asyncio.run(c._async_herken(STATION, TUIN, _pad(time.time() - 240), BEELD, False))
+    assert c.gevraagd == []                       # 4 minuten oud: persoon is al weg
+    assert c.hass.bus.async_fire.call_args[0][1]["onbekende_gezichten"] == 0
+
+
+def test_kleine_gezichten_tellen_niet_mee():
+    klein = _klein(BEELD, 3)                      # gezichten ~40 px en kleiner
+    personen = h.beoordeel(klein)["personen"]
+    assert all(x["gezicht_px"] >= gz.MIN_GEZICHT_PX for x in gz.gezichten_in(klein, personen, {}))
+
+
+def test_aanbellen_live_beeld_wordt_beoordeeld_en_niet_dubbel_gemeld(tmp_path):
+    c = _coordinator(tmp_path, live=BEELD)
+    asyncio.run(c._async_herken_live(TUIN, BEELD))
+    data = c.hass.bus.async_fire.call_args[0][1]
+    assert data["beeldbron"] == "live" and data["onbekende_gezichten"] == 2 and c.gevraagd == []
+    aantal = c.hass.bus.async_fire.call_count
+    _draai(c)                                     # het gebeurtenisbeeld van dezelfde opname komt later
+    assert c.hass.bus.async_fire.call_count == aantal and c.herkenning[TUIN]["al_gemeld"]
 
 
 def test_fout_bij_gezichten_raakt_de_detectie_niet(tmp_path, monkeypatch):

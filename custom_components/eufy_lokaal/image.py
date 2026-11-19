@@ -20,7 +20,7 @@ async def async_setup_entry(
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([*(LaatsteBeeld(c, sn) for sn in c.apparaten if sn not in c.stations),
                         *(LiveMomentopname(c, sn) for sn in c.apparaten if sn not in c.stations),
-                        *(LaatstePersoon(c, sn) for sn in c.apparaten if c.herkent(sn))])
+                        *(LaatstePersoon(c, sn) for sn in c.apparaten if c.kan_herkennen(sn))])
 
 
 class LaatsteBeeld(CoordinatorEntity[EufyLokaalCoordinator], ImageEntity):

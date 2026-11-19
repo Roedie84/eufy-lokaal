@@ -35,7 +35,7 @@ async def async_setup_entry(
     for sn, a in c.apparaten.items():
         if sn not in c.stations:
             entiteiten += [ParametersSensor(c, sn, station=False), OpnamesSensor(c, sn)]
-            if c.herkent(sn):
+            if c.kan_herkennen(sn):
                 entiteiten.append(PersonenSensor(c, sn))
         if parameter(a, PARAM_BATTERIJ) is not None:
             entiteiten.append(ApparaatBatterijSensor(c, sn))

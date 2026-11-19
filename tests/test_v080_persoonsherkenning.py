@@ -261,9 +261,14 @@ def _draai(c, sn, pad, eerste=False):
         asyncio.run(c._async_herken(STATION, sn, pad, _jpeg(), eerste))
 
 
-def test_alleen_camera_s_zonder_deurbel_worden_beoordeeld(tmp_path):
+def test_elke_camera_doet_mee_tenzij_de_schakelaar_uit_staat(tmp_path):
+    # v0.11.0: ook de deurbel (Ruud 19-11); per camera uit te zetten
     c = _coordinator(tmp_path, EEN_PERSOON)
-    assert c.herkent(TUIN) and not c.herkent(DEURBEL) and not c.herkent(STATION) and not c.herkent("onbekend")
+    assert c.herkent(TUIN) and c.herkent(DEURBEL) and not c.herkent(STATION) and not c.herkent("onbekend")
+    c.zet_herkenning(DEURBEL, False)
+    assert not c.herkent(DEURBEL) and c.kan_herkennen(DEURBEL) and c.herkent(TUIN)
+    c.zet_herkenning(DEURBEL, True)
+    assert c.herkent(DEURBEL)
 
 
 def test_persoon_zet_detectie_aan_bewaart_beeld_en_meldt(tmp_path):
@@ -324,11 +329,15 @@ def test_nieuw_beeld_start_een_beoordeling_alleen_waar_het_moet(tmp_path, monkey
     for sn, pad in ((TUIN, "/a/20261119145430/s.jpg"), (DEURBEL, "/b/20261119145431/s.jpg")):
         c._beeld_voor[pad] = (sn, time.time())
         c._bij_afbeelding(STATION, {"bestand": pad, "ruw": b"x"})
-    assert len(c._taken) == 1 and TUIN in c.beelden and DEURBEL in c.beelden
+    assert len(c._taken) == 2 and TUIN in c.beelden and DEURBEL in c.beelden
     # hetzelfde beeld nog eens: niet opnieuw
     c._beeld_voor["/a/20261119145430/s.jpg"] = (TUIN, time.time())
     c._bij_afbeelding(STATION, {"bestand": "/a/20261119145430/s.jpg", "ruw": b"x"})
-    assert len(c._taken) == 1
+    assert len(c._taken) == 2
+    c.zet_herkenning(TUIN, False)   # uit: geen beoordeling
+    c._beeld_voor["/a/20261119145500/s.jpg"] = (TUIN, time.time())
+    c._bij_afbeelding(STATION, {"bestand": "/a/20261119145500/s.jpg", "ruw": b"x"})
+    assert len(c._taken) == 2
     for taak in c._taken:
         taak.close()
 
@@ -341,7 +350,7 @@ def test_logboek_teruglezen_na_herstart_en_overzicht(tmp_path):
     nieuw = pl.opslaan(map_, TUIN, nu - 5, 0.9, 2, b"\xff\xd8net", nu=nu)
     pl.opslaan(map_, DEURBEL, nu, 0.9, 1, b"\xff\xd8", nu=nu)
     asyncio.run(c.async_personen_laden())
-    assert [m["bestand"] for m in c.personen[TUIN]][0] == nieuw and DEURBEL not in c.personen
+    assert [m["bestand"] for m in c.personen[TUIN]][0] == nieuw and len(c.personen[DEURBEL]) == 1
     assert c.persoonsbeelden[TUIN]["data"] == b"\xff\xd8net"
     o = c.personen_overzicht(TUIN)
     assert o["bewaard"] == 2 and o["vandaag"] in (0, 1)  # 5 s geleden kan net gisteren zijn

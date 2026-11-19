@@ -19,8 +19,8 @@ from .rekenen import Model
 
 MAP = Path(__file__).parent / "model"
 ZOEK_ZIJDE = 640
-ZOEK_DREMPEL = 0.6       # zekerheid vanaf waar iets een gezicht is (OpenCV: 0,9 voor hele beelden)
-MIN_GEZICHT_PX = 24      # kleiner (afstand tussen de ogen x ~2,5) is niet te herkennen
+ZOEK_DREMPEL = 0.8       # zekerheid vanaf waar iets een gezicht is (OpenCV: 0,9 voor hele beelden)
+MIN_GEZICHT_PX = 40      # v0.11.0: kleiner geeft vage kenmerken die het inleren vervuilen (was 24)
 GELIJK_DREMPEL = 0.40    # cosinus vanaf waar het dezelfde persoon is (OpenCV: 0,363)
 KEN_ZIJDE = 112
 # waar ogen, neus en mondhoeken in een rechtgezet gezicht van 112x112 horen (ArcFace)

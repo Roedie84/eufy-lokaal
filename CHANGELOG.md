@@ -1,5 +1,14 @@
 # Changelog — Eufy Lokaal
 
+## v0.11.0 — betere gezichten, ook de deurbel
+
+- Gevonden 19-11 bij de eerste echte gezichten: na een herstart werd een opname van 4 minuten oud nog beoordeeld; het live beeld kwam toen de persoon al weg was, en uit het kleine gebeurtenisbeeld (640x360) kwam een vlek die als gezicht werd bewaard. Nu:
+  - gezichten alleen nog uit het live beeld; zonder bruikbaar live beeld blijft het 'persoon';
+  - een live beeld alleen als de opname hooguit 90 s oud is;
+  - een gezicht moet minstens 40 pixels breed zijn (was 24) en 80 % zeker (was 60 %).
+- De deurbel doet mee (Ruud 19-11). Bij aanbellen wordt de live momentopname die er toch al komt meteen beoordeeld (personen en gezichten); het gebeurtenisbeeld van dezelfde opname wordt daarna niet nog eens gemeld.
+- Nieuwe schakelaar *Beeldherkenning* per camera (instelling, overleeft een herstart). Uit = geen beoordeling en geen extra live beeld, dus geen extra batterijverbruik.
+
 ## v0.10.0 — de hond
 
 - Hetzelfde model dat personen herkent, ziet ook honden (geen extra rekenwerk). Vanaf 45 % zekerheid en 3 % van de beeldhoogte gaat *Huisdier* 30 s aan; in het beeld komt een blauw kader (personen geel).
