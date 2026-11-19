@@ -470,30 +470,37 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         beeldtijd = beeldtijd_uit_pad(pad, dt_util.get_default_time_zone())
         vers = is_vers(beeldtijd, nu, eerste)
         personen = u["personen"]
+        honden = u.get("honden") or []
         zekerheid = max((p["zekerheid"] for p in personen), default=None)
         t["beoordeeld"] += 1
         t["ms"] = [*t["ms"][-49:], u["ms"]]
         self.herkenning[sn] = {"tijd": nu, "beeldtijd": beeldtijd, "pad": pad, "aantal": len(personen),
                                "zekerheid": zekerheid, "hoogste": u["hoogste"], "ms": u["ms"],
-                               "vers": vers, "fout": None}
-        if not personen or not vers:
+                               "honden": len(honden), "vers": vers, "fout": None}
+        if not vers or not (personen or honden):
             self.async_update_listeners()
+            return
+        if not personen:
+            await self._async_alleen_hond(station_sn, sn, data, honden, beeldtijd, nu)
             return
         t["met_persoon"] += 1
         # v0.9.0: wie is het? Live beeld (scherper) en gezichten vergelijken met de bekenden
-        g = await self._async_gezichten(sn, data, personen)
-        bron_beeld, vakken = g["beeld"], g["vakken"]
+        g = await self._async_gezichten(sn, data, personen, honden)
+        bron_beeld, vakken, honden = g["beeld"], g["vakken"], g["honden"]
+        if honden:
+            self.detecties.setdefault(sn, {})["huisdier"] = time.time()
         namen = [x["naam"] for x in g["gezichten"] if x["naam"]]
         onbekend = [x for x in g["gezichten"] if not x["naam"]]
         self.herkenning[sn].update({"namen": namen, "onbekend": len(onbekend), "gezichten": len(g["gezichten"]),
                                     "beeldbron": g["bron"]})
         nu = time.time()
         moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": len(personen), "bestand": None,
-                  "namen": namen}
+                  "namen": namen, "hond": bool(honden)}
         try:
-            beeld = await self.hass.async_add_executor_job(teken_vakken, bron_beeld, vakken)
+            beeld = await self.hass.async_add_executor_job(teken_vakken, bron_beeld, vakken, honden)
             moment["bestand"] = await self.hass.async_add_executor_job(
-                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, len(personen), beeld, nu, namen)
+                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, len(personen), beeld, nu, namen,
+                bool(honden))
         except Exception as err:  # noqa: BLE001 - zonder logboekbeeld telt de detectie nog steeds
             beeld = bron_beeld
             _LOGGER.warning("Persoonsbeeld van %s niet bewaard: %s", sn, err)
@@ -507,10 +514,35 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                                        "gezicht_beeld": self.persoon_url(f"gezicht_{eerste_onbekend}.jpg")
                                        if eerste_onbekend else None,
                                        "bron": "beeldherkenning", "beeldbron": g["bron"], "zekerheid": zekerheid,
-                                       "aantal": len(personen), "beeld": self.persoon_url(moment["bestand"])}, nu)
+                                       "aantal": len(personen), "hond": bool(honden),
+                                       "beeld": self.persoon_url(moment["bestand"])}, nu)
         self.async_update_listeners()
 
-    async def _async_gezichten(self, sn: str, data: bytes, personen: list[dict]) -> dict:
+    async def _async_alleen_hond(self, station_sn: str, sn: str, data: bytes, honden: list[dict],
+                                 beeldtijd: float | None, nu: float) -> None:
+        """v0.10.0: een hond zonder persoon: detectie Huisdier, beeld in het logboek, gebeurtenis 'hond'."""
+        from .herkenning import teken_vakken
+        from .persoonslog import MAX_PER_CAMERA, opslaan
+
+        zekerheid = max(h["zekerheid"] for h in honden)
+        moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": 0, "bestand": None,
+                  "namen": [], "hond": True}
+        try:
+            beeld = await self.hass.async_add_executor_job(teken_vakken, data, [], honden)
+            moment["bestand"] = await self.hass.async_add_executor_job(
+                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, 0, beeld, nu, [], True)
+        except Exception as err:  # noqa: BLE001 - zonder logboekbeeld telt de detectie nog steeds
+            _LOGGER.warning("Hondbeeld van %s niet bewaard: %s", sn, err)
+        self.personen[sn] = [moment, *(self.personen.get(sn) or [])][:MAX_PER_CAMERA]
+        t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
+        t["met_hond"] = t.get("met_hond", 0) + 1
+        self._gebeurtenis(station_sn, {"soort": "hond", "event_type": None, "apparaat_sn": sn, "persoon": None,
+                                       "namen": [], "bron": "beeldherkenning", "zekerheid": zekerheid,
+                                       "aantal": 0, "hond": True, "beeld": self.persoon_url(moment["bestand"])}, nu)
+        self.async_update_listeners()
+
+    async def _async_gezichten(self, sn: str, data: bytes, personen: list[dict],
+                               honden: list[dict] | None = None) -> dict:
         """Live momentopname (de camera is door de beweging toch wakker; 1920x1080 tegen 640x360
         van het gebeurtenisbeeld), daarop opnieuw de personen en per persoon het gezicht.
         Lukt het live beeld niet, dan het gebeurtenisbeeld. Fouten raken de detectie niet."""
@@ -519,7 +551,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         from .herkenning import beoordeel
 
         t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
-        uit = {"bron": "gebeurtenisbeeld", "beeld": data, "vakken": personen, "gezichten": []}
+        uit = {"bron": "gebeurtenisbeeld", "beeld": data, "vakken": personen, "honden": list(honden or []),
+               "gezichten": []}
         try:
             if await asyncio.wait_for(self.async_momentopname(sn, "persoon"), 25):
                 live = (self.momentopnamen.get(sn) or {}).get("data")
@@ -527,7 +560,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                     async with self._herken_slot:
                         u = await self.hass.async_add_executor_job(beoordeel, live)
                     if u["personen"]:
-                        uit.update(bron="live", beeld=live, vakken=u["personen"])
+                        uit.update(bron="live", beeld=live, vakken=u["personen"],
+                                   honden=u.get("honden") or uit["honden"])
         except Exception as err:  # noqa: BLE001 - zonder live beeld verder met het gebeurtenisbeeld
             t["live_mislukt"] = t.get("live_mislukt", 0) + 1
             _LOGGER.debug("Geen live beeld van %s voor de gezichten: %s", sn, err)
@@ -608,12 +642,14 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 if not self.herkent(sn):
                     continue
                 momenten = await self.hass.async_add_executor_job(lijst, map_, sn)
-                self.personen[sn] = [{k: m.get(k) for k in ("tijd", "zekerheid", "aantal", "bestand", "namen")}
+                self.personen[sn] = [{k: m.get(k) for k in ("tijd", "zekerheid", "aantal", "bestand", "namen", "hond")}
                                      for m in momenten]
-                if momenten and sn not in self.persoonsbeelden:
-                    data = await self.hass.async_add_executor_job(lees, map_, momenten[0]["bestand"])
+                met_persoon = [m for m in self.personen[sn] if m.get("aantal")]
+                momenten = [m for m in momenten if m.get("aantal")]
+                if met_persoon and sn not in self.persoonsbeelden:
+                    data = await self.hass.async_add_executor_job(lees, map_, met_persoon[0]["bestand"])
                     if data:
-                        self.persoonsbeelden[sn] = {"data": data, **self.personen[sn][0]}
+                        self.persoonsbeelden[sn] = {"data": data, **met_persoon[0]}
         except OSError as err:
             _LOGGER.warning("Persoonslogboek niet gelezen: %s", err)
 
@@ -626,14 +662,16 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         h = self.herkenning.get(sn) or {}
         ms = (self.tellingen.get("herkenning") or {}).get("ms") or []
         return {
-            "vandaag": sum(1 for m in momenten if m["tijd"] >= begin),
+            "vandaag": sum(1 for m in momenten if m["tijd"] >= begin and m.get("aantal")),
+            "hond_vandaag": sum(1 for m in momenten if m["tijd"] >= begin and m.get("hond")),
             "bewaard": len(momenten),
             "laatste": [{"tijd": dt_util.as_local(dt_util.utc_from_timestamp(m["tijd"])).isoformat(),
                          "zekerheid": m["zekerheid"], "aantal": m["aantal"], "namen": m.get("namen") or [],
+                         "hond": bool(m.get("hond")),
                          "beeld": self.persoon_url(m["bestand"])}
                         for m in momenten[:20]],
             "laatste_uitslag": {k: h.get(k) for k in ("aantal", "zekerheid", "hoogste", "ms", "vers", "fout", "namen",
-                                                      "onbekend", "gezichten", "beeldbron")} if h else None,
+                                                      "onbekend", "gezichten", "beeldbron", "honden")} if h else None,
             "ingeleerd": {k: len(v) for k, v in sorted(self.bekenden["personen"].items())},
             "wacht_op_naam": len(self.bekenden["onbekend"]),
             "rekentijd_mediaan_ms": round(statistics.median(ms)) if ms else None,

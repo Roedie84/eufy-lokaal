@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.10.0 — de hond
+
+- Hetzelfde model dat personen herkent, ziet ook honden (geen extra rekenwerk). Vanaf 45 % zekerheid en 3 % van de beeldhoogte gaat *Huisdier* 30 s aan; in het beeld komt een blauw kader (personen geel).
+- Alleen een hond: gebeurtenis `hond` (bron `beeldherkenning`), beeld in het logboek, geen live beeld en geen gezichten. Persoon met hond: de gewone persoonsgebeurtenis met `hond: true`; het logboek bewaart per moment of de hond erbij was.
+- *Personen vandaag* telt alleen nog momenten met een persoon en heeft het attribuut `hond_vandaag`; elk moment in `laatste` heeft `hond`. *Laatste persoon* toont alleen beelden met een persoon.
+
 ## v0.9.0 — wie staat er in beeld?
 
 - Bij een persoon op zolder of achtertuin haalt de integratie meteen een live beeld op (1920x1080, ~2 s; de camera is door de beweging al wakker). Het gebeurtenisbeeld van de HomeBase is 640x360: een gezicht is daarop ~20 pixels, te klein om te herkennen. Lukt het live beeld niet, dan wordt het gebeurtenisbeeld gebruikt.

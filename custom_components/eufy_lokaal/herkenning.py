@@ -14,6 +14,9 @@ import numpy as np
 MODELBESTAND = Path(__file__).parent / "model" / "personen.npz"
 ZIJDE = 416
 KLASSE_PERSOON = 0
+KLASSE_HOND = 16        # COCO: 15 kat, 16 hond
+HOND_DREMPEL = 0.45
+HOND_MIN_HOOGTE = 0.03  # een hond is kleiner dan een mens
 DREMPEL = 0.45          # zekerheid vanaf waar een vak als persoon telt
 NMS_OVERLAP = 0.45
 MIN_HOOGTE = 0.06       # een persoon is minstens 6 % van de beeldhoogte (ruis ver weg telt niet)
@@ -66,13 +69,14 @@ def _nms(vakken: np.ndarray, scores: np.ndarray, overlap: float) -> list[int]:
 
 
 def personen_uit(ruw: np.ndarray, schaal: float, breedte: int, hoogte: int, drempel: float = DREMPEL,
-                 min_hoogte: float = MIN_HOOGTE) -> list[dict]:
-    """Uit de modeluitvoer de personen: zekerheid en vak als deel van het beeld (0..1)."""
+                 min_hoogte: float = MIN_HOOGTE, klasse: int = KLASSE_PERSOON) -> list[dict]:
+    """Uit de modeluitvoer de personen (of, v0.10.0, een andere klasse zoals de hond):
+    zekerheid en vak als deel van het beeld (0..1)."""
     v = _vakken(ruw)
-    scores = v[:, 4] * v[:, 5 + KLASSE_PERSOON]
-    # alleen waar 'persoon' ook de sterkste klasse is
+    scores = v[:, 4] * v[:, 5 + klasse]
+    # alleen waar deze klasse ook de sterkste is
     sterkste = v[:, 5:].argmax(axis=1)
-    kies = (scores >= drempel) & (sterkste == KLASSE_PERSOON)
+    kies = (scores >= drempel) & (sterkste == klasse)
     v, scores = v[kies], scores[kies]
     if not len(v):
         return []
@@ -107,17 +111,20 @@ def beoordeel(jpeg: bytes, drempel: float = DREMPEL) -> dict:
         _model = Model(MODELBESTAND)
     beeld = Image.open(io.BytesIO(jpeg))
     x, schaal = _voorbereiden(beeld)
-    alle = personen_uit(_model.reken(x)[0], schaal, beeld.width, beeld.height, ONDERGRENS)
+    ruw = _model.reken(x)[0]
+    alle = personen_uit(ruw, schaal, beeld.width, beeld.height, ONDERGRENS)
     return {
         "personen": [p for p in alle if p["zekerheid"] >= drempel],
+        # v0.10.0: honden uit hetzelfde model, zonder extra rekenwerk
+        "honden": personen_uit(ruw, schaal, beeld.width, beeld.height, HOND_DREMPEL, HOND_MIN_HOOGTE, KLASSE_HOND),
         "hoogste": max((p["zekerheid"] for p in alle), default=0.0),
         "breedte": beeld.width, "hoogte": beeld.height,
         "ms": round((time.perf_counter() - begin) * 1000),
     }
 
 
-def teken_vakken(jpeg: bytes, personen: list[dict]) -> bytes:
-    """Het beeld met om elke persoon een kader (voor de melding en het logboek)."""
+def teken_vakken(jpeg: bytes, personen: list[dict], honden: list[dict] | None = None) -> bytes:
+    """Het beeld met om elke persoon een geel kader en om elke hond een blauw (melding, logboek)."""
     from PIL import Image, ImageDraw
 
     beeld = Image.open(io.BytesIO(jpeg)).convert("RGB")
@@ -127,6 +134,10 @@ def teken_vakken(jpeg: bytes, personen: list[dict]) -> bytes:
         x1, y1, x2, y2 = p["vak"]
         pen.rectangle((x1 * beeld.width, y1 * beeld.height, x2 * beeld.width, y2 * beeld.height),
                       outline=(255, 196, 0), width=dikte)
+    for p in honden or []:
+        x1, y1, x2, y2 = p["vak"]
+        pen.rectangle((x1 * beeld.width, y1 * beeld.height, x2 * beeld.width, y2 * beeld.height),
+                      outline=(0, 160, 255), width=dikte)
     uit = io.BytesIO()
     beeld.save(uit, "JPEG", quality=85)
     return uit.getvalue()

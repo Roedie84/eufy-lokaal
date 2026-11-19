@@ -26,7 +26,7 @@ def _veilig(sn: str) -> str:
 
 
 def bestandsnaam(sn: str, tijd: float, zekerheid: float, aantal: int) -> str:
-    return f"{_veilig(sn)}_{int(tijd)}_{min(999, max(0, round(zekerheid * 100))):03d}_{min(99, max(1, aantal))}.jpg"
+    return f"{_veilig(sn)}_{int(tijd)}_{min(999, max(0, round(zekerheid * 100))):03d}_{min(99, max(0, aantal))}.jpg"
 
 
 def ontleed(naam: str) -> dict | None:
@@ -65,11 +65,12 @@ def lijst(map_: str | os.PathLike, sn: str | None = None) -> list[dict]:
         return []
     uit = [m for m in (ontleed(n) for n in namen) if m and (sn is None or m["sn"] == _veilig(sn))]
     for m in uit:
-        m["namen"] = []
+        m["namen"], m["hond"] = [], False
         if m["bestand"][:-4] + ".json" in namen:
             try:
-                m["namen"] = list(json.loads((Path(map_) / (m["bestand"][:-4] + ".json")).read_text())["namen"])
-            except (OSError, ValueError, KeyError, TypeError):
+                extra = json.loads((Path(map_) / (m["bestand"][:-4] + ".json")).read_text())
+                m["namen"], m["hond"] = list(extra.get("namen") or []), bool(extra.get("hond"))
+            except (OSError, ValueError, AttributeError, TypeError):
                 pass
     return sorted(uit, key=lambda m: m["tijd"], reverse=True)
 
@@ -93,7 +94,7 @@ def opruimen(map_: str | os.PathLike, nu: float) -> int:
 
 
 def opslaan(map_: str | os.PathLike, sn: str, tijd: float, zekerheid: float, aantal: int, jpeg: bytes,
-            nu: float | None = None, namen: list[str] | None = None) -> str:
+            nu: float | None = None, namen: list[str] | None = None, hond: bool = False) -> str:
     """Beeld wegschrijven (eerst .tmp, dan in één keer vervangen) en opruimen. Geeft de naam.
     v0.9.0: de herkende namen staan ernaast in <naam>.json."""
     Path(map_).mkdir(parents=True, exist_ok=True)
@@ -102,8 +103,8 @@ def opslaan(map_: str | os.PathLike, sn: str, tijd: float, zekerheid: float, aan
     tijdelijk = doel.with_name(naam + ".tmp")
     tijdelijk.write_bytes(jpeg)
     os.replace(tijdelijk, doel)
-    if namen:
-        doel.with_suffix(".json").write_text(json.dumps({"namen": list(namen)}))
+    if namen or hond:
+        doel.with_suffix(".json").write_text(json.dumps({"namen": list(namen or []), "hond": bool(hond)}))
     opruimen(map_, tijd if nu is None else nu)
     return naam
 

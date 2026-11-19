@@ -348,8 +348,8 @@ class PersonenSensor(_Basis):
     @property
     def extra_state_attributes(self) -> dict:
         o = self.coordinator.personen_overzicht(self._sn)
-        return {k: o[k] for k in ("bewaard", "laatste", "laatste_uitslag", "rekentijd_mediaan_ms", "ingeleerd",
-                                  "wacht_op_naam")}
+        return {k: o[k] for k in ("hond_vandaag", "bewaard", "laatste", "laatste_uitslag", "rekentijd_mediaan_ms",
+                                  "ingeleerd", "wacht_op_naam")}
 
 
 class StationFirmwareSensor(_Station):
