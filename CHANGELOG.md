@@ -1,5 +1,11 @@
 # Changelog — Eufy Lokaal
 
+## v0.12.0 — wandelen met de hond
+
+- Nieuwe sensor *Wandelingen met de hond vandaag* (Eufy Lokaal). Afgeleid uit het logboek van alle camera's (Ruud 19-11: meestal via de achtertuin): de hond met iemand gezien, daarna 4 minuten tot 3 uur geen hond, dan de hond terug = een wandeling. Korte wandelingen tellen mee (bij regen soms 5 minuten). Wie: de herkende namen bij vertrek en terugkomst samen.
+- Attributen: `onderweg` (sinds, met wie, minuten) zolang de hond met iemand weg is, `laatste` (vertrek, terug, duur, namen) en `per_persoon_14_dagen`.
+- Een afleiding, geen meting: blijft iemand met de hond een paar minuten buiten beeld in de tuin, dan telt dat ook als wandeling.
+
 ## v0.11.0 — betere gezichten, ook de deurbel
 
 - Gevonden 19-11 bij de eerste echte gezichten: na een herstart werd een opname van 4 minuten oud nog beoordeeld; het live beeld kwam toen de persoon al weg was, en uit het kleine gebeurtenisbeeld (640x360) kwam een vlek die als gezicht werd bewaard. Nu:

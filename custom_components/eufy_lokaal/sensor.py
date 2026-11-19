@@ -27,7 +27,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry), GezichtenSensor(c, entry)]
+    entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry), GezichtenSensor(c, entry), WandelSensor(c, entry)]
     for sn in c.stations:
         entiteiten += [StationLokaalSensor(c, sn), StationP2PSensor(c, sn), StationFirmwareSensor(c, sn),
                        StationIpSensor(c, sn), StationAlarmstandSensor(c, sn), StationMeldingSensor(c, sn),
@@ -323,6 +323,33 @@ class GezichtenSensor(_Basis):
     def extra_state_attributes(self) -> dict:
         return {"wachtend": self.coordinator.gezichten_wachtend(),
                 "ingeleerd": {k: len(v) for k, v in sorted(self.coordinator.bekenden["personen"].items())}}
+
+
+class WandelSensor(_Basis):
+    """v0.12.0: wandelingen met de hond vandaag (afgeleid: hond + persoon weg, hond terug)."""
+
+    _attr_name = "Wandelingen met de hond vandaag"
+    _attr_icon = "mdi:dog-side"
+    _attr_native_unit_of_measurement = "keer"
+    _unrecorded_attributes = frozenset({"laatste", "per_persoon_14_dagen"})
+
+    def __init__(self, c, entry) -> None:
+        super().__init__(c)
+        self._attr_unique_id = f"{entry.entry_id}_wandelingen_vandaag"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)}, name="Eufy Lokaal", manufacturer="Roedie84",
+            model="Eigen integratie",
+        )
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.wandel_overzicht()["vandaag"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        o = self.coordinator.wandel_overzicht()
+        return {"onderweg": o["onderweg"], "laatste": o["laatste"], "per_persoon_14_dagen": o["per_persoon_14_dagen"],
+                "let_op": "afgeleid uit de camera's: hond met iemand weg, hond terug"}
 
 
 class PersonenSensor(_Basis):

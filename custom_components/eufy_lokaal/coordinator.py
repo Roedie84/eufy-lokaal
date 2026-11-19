@@ -664,6 +664,26 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
         return ingeleerd
 
+    def wandel_overzicht(self) -> dict:
+        """v0.12.0: wandelingen met de hond over alle camera's (zie wandelingen.py)."""
+        from homeassistant.util import dt as dt_util
+
+        from .wandelingen import per_persoon, wandelingen
+
+        alle = [m for lijst in self.personen.values() for m in lijst]
+        w = wandelingen(alle, time.time())
+        begin = dt_util.start_of_local_day().timestamp()
+
+        def tijd(t):
+            return dt_util.as_local(dt_util.utc_from_timestamp(t)).isoformat()
+
+        return {
+            "vandaag": sum(1 for x in w["wandelingen"] if x["vertrek"] >= begin),
+            "laatste": [{**x, "vertrek": tijd(x["vertrek"]), "terug": tijd(x["terug"])} for x in w["wandelingen"][:20]],
+            "onderweg": {**w["onderweg"], "sinds": tijd(w["onderweg"]["sinds"])} if w["onderweg"] else None,
+            "per_persoon_14_dagen": per_persoon(w["wandelingen"]),
+        }
+
     def gezichten_wachtend(self, aantal: int = 8) -> list[dict]:
         """Onbekende gezichten die op een naam wachten, nieuwste eerst (voor het dashboard)."""
         from homeassistant.util import dt as dt_util
