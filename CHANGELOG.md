@@ -1,5 +1,14 @@
 # Changelog — Eufy Lokaal
 
+## v0.9.0 — wie staat er in beeld?
+
+- Bij een persoon op zolder of achtertuin haalt de integratie meteen een live beeld op (1920x1080, ~2 s; de camera is door de beweging al wakker). Het gebeurtenisbeeld van de HomeBase is 640x360: een gezicht is daarop ~20 pixels, te klein om te herkennen. Lukt het live beeld niet, dan wordt het gebeurtenisbeeld gebruikt.
+- Per persoon wordt in het bovenste deel van het persoonsvak het gezicht gezocht (YuNet, MIT), rechtgezet op ogen, neus en mond, en omgezet in 128 kenmerken (SFace, Apache-2.0). Die worden vergeleken met de ingeleerde personen (cosinus, vanaf 0,40 dezelfde persoon). Uitkomst getoetst tegen OpenCV 5.1: zelfde gezichten op dezelfde plek, kenmerken 0,998 gelijk.
+- Inleren: een onbekend gezicht wacht 7 dagen op een naam (hooguit 50). Een naam geven kan met een knop in de melding (actie `EUFY_GEZICHT|<id>|<naam>`), met de dienst `eufy_lokaal.gezicht_inleren` of via het dashboard. Per persoon worden hooguit 20 sets kenmerken bewaard, geen foto's. `eufy_lokaal.persoon_vergeten` wist iemand.
+- De gebeurtenis heet nu `bekend_persoon` (met `namen` en `persoon`, bv. "Jill en Ruud") of `onbekend_persoon` (met `gezicht_id` en `gezicht_beeld` van het eerste onbekende gezicht). *Persoon* krijgt het attribuut `namen`; het logboek bewaart de namen per moment. *Persoon* gaat daardoor een paar seconden later aan (live beeld + gezichten).
+- Nieuwe sensor *Gezichten zonder naam* met de lijst wachtende gezichten (beeld, camera, tijd) en per persoon het aantal ingeleerde gezichten.
+- Het rekenwerk staat nu apart (`rekenen.py`) en kent ook BatchNorm, PRelu, Gemm en gewone groepsconvoluties; `tools/omzetten.py` zet een ONNX-model om.
+
 ## v0.8.0 — personen herkennen, lokaal
 
 - De HomeBase 3 zegt lokaal niet óf er een persoon in beeld is (zie v0.7.15); de sensoren *Persoon* gingen daardoor nooit aan (19-11: 0 keer in 7 dagen, tegen 373 keer beweging bij de deurbel). Nu beoordeelt de integratie zelf het beeld dat de HomeBase bij elke beweging opslaat. Er wordt geen stream gestart en er gaat niets naar buiten.

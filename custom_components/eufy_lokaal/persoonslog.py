@@ -6,6 +6,7 @@ lopen. Alleen gewone (synchrone) bestandsfuncties: de coördinator roept ze aan
 via de executor, en ze zijn zonder Home Assistant te testen."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime
@@ -63,6 +64,13 @@ def lijst(map_: str | os.PathLike, sn: str | None = None) -> list[dict]:
     except OSError:
         return []
     uit = [m for m in (ontleed(n) for n in namen) if m and (sn is None or m["sn"] == _veilig(sn))]
+    for m in uit:
+        m["namen"] = []
+        if m["bestand"][:-4] + ".json" in namen:
+            try:
+                m["namen"] = list(json.loads((Path(map_) / (m["bestand"][:-4] + ".json")).read_text())["namen"])
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
     return sorted(uit, key=lambda m: m["tijd"], reverse=True)
 
 
@@ -77,25 +85,35 @@ def opruimen(map_: str | os.PathLike, nu: float) -> int:
                 weg += 1
             except OSError:
                 pass
+            try:
+                os.remove(Path(map_) / (m["bestand"][:-4] + ".json"))
+            except OSError:
+                pass
     return weg
 
 
 def opslaan(map_: str | os.PathLike, sn: str, tijd: float, zekerheid: float, aantal: int, jpeg: bytes,
-            nu: float | None = None) -> str:
-    """Beeld wegschrijven (eerst .tmp, dan in één keer vervangen) en opruimen. Geeft de naam."""
+            nu: float | None = None, namen: list[str] | None = None) -> str:
+    """Beeld wegschrijven (eerst .tmp, dan in één keer vervangen) en opruimen. Geeft de naam.
+    v0.9.0: de herkende namen staan ernaast in <naam>.json."""
     Path(map_).mkdir(parents=True, exist_ok=True)
     naam = bestandsnaam(sn, tijd, zekerheid, aantal)
     doel = Path(map_) / naam
     tijdelijk = doel.with_name(naam + ".tmp")
     tijdelijk.write_bytes(jpeg)
     os.replace(tijdelijk, doel)
+    if namen:
+        doel.with_suffix(".json").write_text(json.dumps({"namen": list(namen)}))
     opruimen(map_, tijd if nu is None else nu)
     return naam
 
 
 def lees(map_: str | os.PathLike, naam: str) -> bytes | None:
-    """Eén beeld uit het logboek; alleen namen die het logboek zelf maakt."""
-    if ontleed(naam) is None:
+    """Eén beeld uit het logboek of (v0.9.0) een gezichtsuitsnede; alleen namen die de
+    integratie zelf maakt."""
+    from .bekenden import GEZICHT_NAAM
+
+    if ontleed(naam) is None and not GEZICHT_NAAM.match(naam or ""):
         return None
     try:
         return (Path(map_) / naam).read_bytes()

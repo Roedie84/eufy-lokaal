@@ -30,7 +30,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _herstel_entiteit_ids(hass, entry)
     if not hass.services.has_service(DOMAIN, "momentopname"):
         hass.services.async_register(DOMAIN, "momentopname", _momentopname_dienst(hass))
+    _gezichtsdiensten(hass)
+    entry.async_on_unload(hass.bus.async_listen("mobile_app_notification_action", _gezicht_knop(hass)))
     return True
+
+
+KNOP_VOORVOEGSEL = "EUFY_GEZICHT|"
+
+
+def lees_knop(actie: str) -> tuple[str, str] | None:
+    """v0.9.0: 'EUFY_GEZICHT|<id>|<naam>' uit een knop in de melding -> (id, naam)."""
+    if not isinstance(actie, str) or not actie.startswith(KNOP_VOORVOEGSEL):
+        return None
+    delen = actie[len(KNOP_VOORVOEGSEL):].split("|", 1)
+    if len(delen) != 2 or not delen[0]:
+        return None
+    return delen[0], delen[1]
+
+
+def _gezicht_knop(hass: HomeAssistant):
+    from homeassistant.core import Event, callback
+
+    @callback
+    def bij_knop(event: Event) -> None:
+        gelezen = lees_knop(event.data.get("action"))
+        if gelezen is None:
+            return
+        for c in (hass.data.get(DOMAIN) or {}).values():
+            if gelezen[0] in c.bekenden["onbekend"]:
+                hass.async_create_task(c.async_gezicht_inleren(*gelezen))
+                return
+    return bij_knop
+
+
+def _gezichtsdiensten(hass: HomeAssistant) -> None:
+    """v0.9.0: eufy_lokaal.gezicht_inleren (gezicht_id, naam) en eufy_lokaal.persoon_vergeten (naam)."""
+    import voluptuous as vol
+    from homeassistant.core import ServiceCall
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers import config_validation as cv
+
+    if hass.services.has_service(DOMAIN, "gezicht_inleren"):
+        return
+
+    async def inleren(call: ServiceCall) -> None:
+        for c in (hass.data.get(DOMAIN) or {}).values():
+            if call.data["gezicht_id"] in c.bekenden["onbekend"]:
+                await c.async_gezicht_inleren(call.data["gezicht_id"], call.data["naam"])
+                return
+        raise HomeAssistantError(f"Geen onbekend gezicht met id {call.data['gezicht_id']}")
+
+    async def vergeten(call: ServiceCall) -> None:
+        if not any([await c.async_persoon_vergeten(call.data["naam"]) for c in (hass.data.get(DOMAIN) or {}).values()]):
+            raise HomeAssistantError(f"Niemand ingeleerd als {call.data['naam']}")
+
+    hass.services.async_register(DOMAIN, "gezicht_inleren", inleren,
+                                 vol.Schema({vol.Required("gezicht_id"): cv.string, vol.Required("naam"): cv.string}))
+    hass.services.async_register(DOMAIN, "persoon_vergeten", vergeten,
+                                 vol.Schema({vol.Required("naam"): cv.string}))
 
 
 def _herstel_entiteit_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:

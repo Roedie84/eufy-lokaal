@@ -123,6 +123,10 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.persoonsbeelden: dict[str, dict] = {}   # laatste beeld met een persoon
         self._herkend_pad: dict[str, str] = {}
         self._herken_slot = asyncio.Lock()
+        # v0.9.0: ingeleerde personen (kenmerken, geen foto's) en nog onbekende gezichten
+        from .bekenden import leeg as _leeg
+
+        self.bekenden: dict = _leeg()
         # v0.7.19: één token per Home Assistant-run, niet per coördinator.
         # Na het herladen van de integratie kreeg de coördinator een nieuw
         # token, maar de stream van HA bleef de oude URL gebruiken: 16/17-10
@@ -476,33 +480,136 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             self.async_update_listeners()
             return
         t["met_persoon"] += 1
-        moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": len(personen), "bestand": None}
+        # v0.9.0: wie is het? Live beeld (scherper) en gezichten vergelijken met de bekenden
+        g = await self._async_gezichten(sn, data, personen)
+        bron_beeld, vakken = g["beeld"], g["vakken"]
+        namen = [x["naam"] for x in g["gezichten"] if x["naam"]]
+        onbekend = [x for x in g["gezichten"] if not x["naam"]]
+        self.herkenning[sn].update({"namen": namen, "onbekend": len(onbekend), "gezichten": len(g["gezichten"]),
+                                    "beeldbron": g["bron"]})
+        nu = time.time()
+        moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": len(personen), "bestand": None,
+                  "namen": namen}
         try:
-            beeld = await self.hass.async_add_executor_job(teken_vakken, data, personen)
+            beeld = await self.hass.async_add_executor_job(teken_vakken, bron_beeld, vakken)
             moment["bestand"] = await self.hass.async_add_executor_job(
-                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, len(personen), beeld, nu)
+                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, len(personen), beeld, nu, namen)
         except Exception as err:  # noqa: BLE001 - zonder logboekbeeld telt de detectie nog steeds
-            beeld = data
+            beeld = bron_beeld
             _LOGGER.warning("Persoonsbeeld van %s niet bewaard: %s", sn, err)
         self.persoonsbeelden[sn] = {"data": beeld, **moment}
         self.personen[sn] = [moment, *(self.personen.get(sn) or [])][:MAX_PER_CAMERA]
-        self._gebeurtenis(station_sn, {"soort": "onbekend_persoon", "event_type": None, "apparaat_sn": sn,
-                                       "persoon": None, "bron": "beeldherkenning", "zekerheid": zekerheid,
+        eerste_onbekend = onbekend[0]["id"] if onbekend and onbekend[0].get("id") else None
+        self._gebeurtenis(station_sn, {"soort": "onbekend_persoon" if not namen else "bekend_persoon",
+                                       "event_type": None, "apparaat_sn": sn,
+                                       "persoon": " en ".join(namen) or None, "namen": namen,
+                                       "onbekende_gezichten": len(onbekend), "gezicht_id": eerste_onbekend,
+                                       "gezicht_beeld": self.persoon_url(f"gezicht_{eerste_onbekend}.jpg")
+                                       if eerste_onbekend else None,
+                                       "bron": "beeldherkenning", "beeldbron": g["bron"], "zekerheid": zekerheid,
                                        "aantal": len(personen), "beeld": self.persoon_url(moment["bestand"])}, nu)
         self.async_update_listeners()
 
+    async def _async_gezichten(self, sn: str, data: bytes, personen: list[dict]) -> dict:
+        """Live momentopname (de camera is door de beweging toch wakker; 1920x1080 tegen 640x360
+        van het gebeurtenisbeeld), daarop opnieuw de personen en per persoon het gezicht.
+        Lukt het live beeld niet, dan het gebeurtenisbeeld. Fouten raken de detectie niet."""
+        from .bekenden import onbekend_erbij
+        from .gezichten import gezichten_in
+        from .herkenning import beoordeel
+
+        t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
+        uit = {"bron": "gebeurtenisbeeld", "beeld": data, "vakken": personen, "gezichten": []}
+        try:
+            if await asyncio.wait_for(self.async_momentopname(sn, "persoon"), 25):
+                live = (self.momentopnamen.get(sn) or {}).get("data")
+                if live:
+                    async with self._herken_slot:
+                        u = await self.hass.async_add_executor_job(beoordeel, live)
+                    if u["personen"]:
+                        uit.update(bron="live", beeld=live, vakken=u["personen"])
+        except Exception as err:  # noqa: BLE001 - zonder live beeld verder met het gebeurtenisbeeld
+            t["live_mislukt"] = t.get("live_mislukt", 0) + 1
+            _LOGGER.debug("Geen live beeld van %s voor de gezichten: %s", sn, err)
+        try:
+            async with self._herken_slot:
+                gevonden = await self.hass.async_add_executor_job(
+                    gezichten_in, uit["beeld"], uit["vakken"], self.bekenden["personen"])
+        except Exception as err:  # noqa: BLE001
+            t["gezicht_fouten"] = t.get("gezicht_fouten", 0) + 1
+            _LOGGER.warning("Gezichten van %s niet bekeken: %s", sn, err)
+            return uit
+        nu = time.time()
+        for x in gevonden:
+            if x["naam"] is None:
+                try:
+                    x["id"] = await self.hass.async_add_executor_job(
+                        onbekend_erbij, self._persoonsmap(), self.bekenden, x["kenmerken"], x["uitsnede"], sn, nu)
+                except OSError as err:
+                    _LOGGER.warning("Onbekend gezicht niet bewaard: %s", err)
+            x.pop("uitsnede", None)
+            x.pop("kenmerken", None)
+        if any(x.get("id") for x in gevonden):
+            await self._async_bekenden_bewaren()
+        t["gezichten"] = t.get("gezichten", 0) + len(gevonden)
+        t["herkend"] = t.get("herkend", 0) + sum(1 for x in gevonden if x["naam"])
+        uit["gezichten"] = gevonden
+        return uit
+
+    async def _async_bekenden_bewaren(self) -> None:
+        from .bekenden import opslaan as bekenden_opslaan
+
+        try:
+            await self.hass.async_add_executor_job(bekenden_opslaan, self._persoonsmap(), self.bekenden)
+        except OSError as err:
+            _LOGGER.warning("Ingeleerde personen niet bewaard: %s", err)
+
+    async def async_gezicht_inleren(self, gezicht_id: str, naam: str | None) -> str | None:
+        """Knop in de melding of dienst: het onbekende gezicht hoort bij 'naam' (None/onbekend = weg)."""
+        from .bekenden import inleren
+
+        if gezicht_id not in self.bekenden["onbekend"]:
+            return None
+        ingeleerd = await self.hass.async_add_executor_job(
+            inleren, self._persoonsmap(), self.bekenden, gezicht_id, naam)
+        await self._async_bekenden_bewaren()
+        self.hass.bus.async_fire(f"{DOMAIN}_gezicht_ingeleerd", {"gezicht_id": gezicht_id, "naam": ingeleerd})
+        self.async_update_listeners()
+        return ingeleerd
+
+    def gezichten_wachtend(self, aantal: int = 8) -> list[dict]:
+        """Onbekende gezichten die op een naam wachten, nieuwste eerst (voor het dashboard)."""
+        from homeassistant.util import dt as dt_util
+
+        rijen = sorted(self.bekenden["onbekend"].items(), key=lambda kv: kv[1].get("tijd") or 0, reverse=True)
+        return [{"id": i, "camera": (self.apparaten.get(o.get("camera")) or {}).get("device_name") or o.get("camera"),
+                 "tijd": dt_util.as_local(dt_util.utc_from_timestamp(o.get("tijd") or 0)).isoformat(),
+                 "beeld": self.persoon_url(f"gezicht_{i}.jpg")} for i, o in rijen[:aantal]]
+
+    async def async_persoon_vergeten(self, naam: str) -> bool:
+        from .bekenden import vergeten
+
+        weg = vergeten(self.bekenden, naam)
+        if weg:
+            await self._async_bekenden_bewaren()
+            self.async_update_listeners()
+        return weg
+
     async def async_personen_laden(self) -> None:
         """Na het opstarten het logboek en het laatste persoonsbeeld teruglezen."""
+        from .bekenden import laden as bekenden_laden
         from .persoonslog import lees, lijst, opruimen
 
         map_ = self._persoonsmap()
         try:
+            self.bekenden = await self.hass.async_add_executor_job(bekenden_laden, map_)
             await self.hass.async_add_executor_job(opruimen, map_, time.time())
             for sn in self.apparaten:
                 if not self.herkent(sn):
                     continue
                 momenten = await self.hass.async_add_executor_job(lijst, map_, sn)
-                self.personen[sn] = [{k: m[k] for k in ("tijd", "zekerheid", "aantal", "bestand")} for m in momenten]
+                self.personen[sn] = [{k: m.get(k) for k in ("tijd", "zekerheid", "aantal", "bestand", "namen")}
+                                     for m in momenten]
                 if momenten and sn not in self.persoonsbeelden:
                     data = await self.hass.async_add_executor_job(lees, map_, momenten[0]["bestand"])
                     if data:
@@ -522,9 +629,13 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "vandaag": sum(1 for m in momenten if m["tijd"] >= begin),
             "bewaard": len(momenten),
             "laatste": [{"tijd": dt_util.as_local(dt_util.utc_from_timestamp(m["tijd"])).isoformat(),
-                         "zekerheid": m["zekerheid"], "aantal": m["aantal"], "beeld": self.persoon_url(m["bestand"])}
+                         "zekerheid": m["zekerheid"], "aantal": m["aantal"], "namen": m.get("namen") or [],
+                         "beeld": self.persoon_url(m["bestand"])}
                         for m in momenten[:20]],
-            "laatste_uitslag": {k: h.get(k) for k in ("aantal", "zekerheid", "hoogste", "ms", "vers", "fout")} if h else None,
+            "laatste_uitslag": {k: h.get(k) for k in ("aantal", "zekerheid", "hoogste", "ms", "vers", "fout", "namen",
+                                                      "onbekend", "gezichten", "beeldbron")} if h else None,
+            "ingeleerd": {k: len(v) for k, v in sorted(self.bekenden["personen"].items())},
+            "wacht_op_naam": len(self.bekenden["onbekend"]),
             "rekentijd_mediaan_ms": round(statistics.median(ms)) if ms else None,
         }
 
@@ -900,5 +1011,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "live": {sn: {**l.samenvatting(), "route": getattr(l, "route", None)} for sn, l in self.live.items()},
             "herkenning": {**{k: v for k, v in (t.get("herkenning") or {}).items() if k != "ms"},
                            "camera's": [sn for sn in self.apparaten if self.herkent(sn)],
+                           "ingeleerd": {k: len(v) for k, v in self.bekenden["personen"].items()},
+                           "wacht_op_naam": len(self.bekenden["onbekend"]),
                            "laatste": self.herkenning},
         }

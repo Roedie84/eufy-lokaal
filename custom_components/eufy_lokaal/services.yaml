@@ -3,3 +3,20 @@ momentopname:
     entity:
       integration: eufy_lokaal
       domain: camera
+
+gezicht_inleren:
+  fields:
+    gezicht_id:
+      required: true
+      selector:
+        text:
+    naam:
+      required: true
+      selector:
+        text:
+persoon_vergeten:
+  fields:
+    naam:
+      required: true
+      selector:
+        text:

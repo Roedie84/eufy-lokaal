@@ -27,7 +27,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry)]
+    entiteiten: list[SensorEntity] = [EufyLokaalSensor(c, entry), GezichtenSensor(c, entry)]
     for sn in c.stations:
         entiteiten += [StationLokaalSensor(c, sn), StationP2PSensor(c, sn), StationFirmwareSensor(c, sn),
                        StationIpSensor(c, sn), StationAlarmstandSensor(c, sn), StationMeldingSensor(c, sn),
@@ -298,6 +298,33 @@ class OpnamesSensor(_Basis):
                 "laatste_info_ruw": (self.coordinator.laatste_info.get(self._sn) or {}).get("ruw")}
 
 
+class GezichtenSensor(_Basis):
+    """v0.9.0: hoeveel gezichten op een naam wachten, met de lijst voor het dashboard."""
+
+    _attr_name = "Gezichten zonder naam"
+    _attr_icon = "mdi:face-recognition"
+    _attr_native_unit_of_measurement = "gezichten"
+    # beeld-URL's met het token per opstart: niet naar de database
+    _unrecorded_attributes = frozenset({"wachtend", "ingeleerd"})
+
+    def __init__(self, c, entry) -> None:
+        super().__init__(c)
+        self._attr_unique_id = f"{entry.entry_id}_gezichten_zonder_naam"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)}, name="Eufy Lokaal", manufacturer="Roedie84",
+            model="Eigen integratie",
+        )
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.bekenden["onbekend"])
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"wachtend": self.coordinator.gezichten_wachtend(),
+                "ingeleerd": {k: len(v) for k, v in sorted(self.coordinator.bekenden["personen"].items())}}
+
+
 class PersonenSensor(_Basis):
     """v0.8.0: hoe vaak vandaag een persoon is herkend, met de laatste momenten."""
 
@@ -321,7 +348,8 @@ class PersonenSensor(_Basis):
     @property
     def extra_state_attributes(self) -> dict:
         o = self.coordinator.personen_overzicht(self._sn)
-        return {k: o[k] for k in ("bewaard", "laatste", "laatste_uitslag", "rekentijd_mediaan_ms")}
+        return {k: o[k] for k in ("bewaard", "laatste", "laatste_uitslag", "rekentijd_mediaan_ms", "ingeleerd",
+                                  "wacht_op_naam")}
 
 
 class StationFirmwareSensor(_Station):

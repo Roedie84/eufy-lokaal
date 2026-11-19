@@ -146,5 +146,5 @@ class LaatstePersoon(LaatsteBeeld):
     @property
     def extra_state_attributes(self) -> dict:
         b = self.coordinator.persoonsbeelden.get(self._sn) or {}
-        return {"zekerheid": b.get("zekerheid"), "aantal": b.get("aantal"),
+        return {"zekerheid": b.get("zekerheid"), "aantal": b.get("aantal"), "namen": b.get("namen") or [],
                 "bron": "beeldherkenning in Home Assistant"}

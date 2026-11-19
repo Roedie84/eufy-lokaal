@@ -65,5 +65,6 @@ class Detectie(CoordinatorEntity[EufyLokaalCoordinator], BinarySensorEntity):
             if aan:
                 h = self.coordinator.herkenning.get(self._sn) or {}
                 uit.update({"zekerheid": h.get("zekerheid"), "aantal": h.get("aantal"),
+                            "namen": h.get("namen") or [], "onbekend": h.get("onbekend") or 0,
                             "bron": "beeldherkenning in Home Assistant"})
         return uit

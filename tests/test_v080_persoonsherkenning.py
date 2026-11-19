@@ -52,10 +52,10 @@ def test_convolutie_gelijk_aan_uitgeschreven_som(kanalen, uit, k, stap, rand, gr
     assert np.allclose(h._conv(x, w, b, at), _conv_traag(x, w, b, stap, rand, groep), atol=1e-4)
 
 
-def test_convolutie_met_andere_groep_weigert():
-    with pytest.raises(ValueError):
-        h._conv(np.zeros((1, 4, 5, 5), np.float32), np.zeros((4, 2, 3, 3), np.float32), None,
+def test_convolutie_met_gewone_groepen_kan_sinds_v090():
+    y = h._conv(np.ones((1, 4, 5, 5), np.float32), np.ones((4, 2, 3, 3), np.float32), None,
                 {"group": 2, "pads": [1] * 4})
+    assert y.shape == (1, 4, 5, 5) and y[0, 0, 2, 2] == 18
 
 
 def test_maxpool_houdt_de_maat_en_pakt_het_maximum():
@@ -68,7 +68,7 @@ def test_maxpool_houdt_de_maat_en_pakt_het_maximum():
 
 @pytest.fixture(scope="module")
 def model():
-    return h.Model()
+    return h.Model(h.MODELBESTAND)
 
 
 def test_modelbestand_is_er_en_klein_genoeg():
@@ -231,6 +231,11 @@ def _coordinator(tmp_path, uitslag):
     c.beelden, c._beeld_voor, c.sessies = {}, {}, {}
     c._herken_slot = asyncio.Lock()
     c.live_token = "geheim"
+    c.bekenden, c.momentopnamen = {"personen": {}, "onbekend": {}}, {}
+
+    async def _geen_live(sn, reden="gevraagd"):
+        return False
+    c.async_momentopname = _geen_live
     c.async_update_listeners = MagicMock()
     c._taken = taken
     return c
@@ -274,7 +279,9 @@ def test_persoon_zet_detectie_aan_bewaart_beeld_en_meldt(tmp_path):
     assert naam == "eufy_lokaal_gebeurtenis" and data["soort"] == "onbekend_persoon"
     assert data["bron"] == "beeldherkenning" and data["zekerheid"] == 0.82
     assert data["beeld"] == f"/api/eufy_lokaal/persoon/{moment['bestand']}?token=geheim"
-    assert c.tellingen["herkenning"] == {"beoordeeld": 1, "met_persoon": 1, "fouten": 0, "ms": [210]}
+    t = c.tellingen["herkenning"]
+    assert {k: t[k] for k in ("beoordeeld", "met_persoon", "fouten", "ms")} == \
+        {"beoordeeld": 1, "met_persoon": 1, "fouten": 0, "ms": [210]}
 
 
 def test_geen_persoon_doet_niets_maar_onthoudt_de_uitslag(tmp_path):

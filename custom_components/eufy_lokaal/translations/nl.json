@@ -40,6 +40,30 @@
     "momentopname": {
       "name": "Live momentopname",
       "description": "Haalt direct een live beeld van de camera op via de HomeBase (lokaal)."
+    },
+    "gezicht_inleren": {
+      "name": "Gezicht inleren",
+      "description": "Een onbekend gezicht (id uit de gebeurtenis of de melding) krijgt een naam.",
+      "fields": {
+        "gezicht_id": {
+          "name": "Gezicht-id",
+          "description": "Het id van het onbekende gezicht."
+        },
+        "naam": {
+          "name": "Naam",
+          "description": "Wie het is; 'onbekend' gooit het gezicht weg."
+        }
+      }
+    },
+    "persoon_vergeten": {
+      "name": "Persoon vergeten",
+      "description": "Alle ingeleerde kenmerken van deze persoon wissen.",
+      "fields": {
+        "naam": {
+          "name": "Naam",
+          "description": "Wie vergeten moet worden."
+        }
+      }
     }
   }
 }

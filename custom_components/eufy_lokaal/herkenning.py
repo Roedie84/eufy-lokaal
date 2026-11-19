@@ -6,7 +6,6 @@ Eén beeld kost ongeveer een seconde rekentijd; altijd buiten de event-loop aanr
 from __future__ import annotations
 
 import io
-import json
 from pathlib import Path
 from typing import Any
 
@@ -19,111 +18,7 @@ DREMPEL = 0.45          # zekerheid vanaf waar een vak als persoon telt
 NMS_OVERLAP = 0.45
 MIN_HOOGTE = 0.06       # een persoon is minstens 6 % van de beeldhoogte (ruis ver weg telt niet)
 
-_vensters = np.lib.stride_tricks.sliding_window_view
-
-
-def _conv(x: np.ndarray, w: np.ndarray, b: np.ndarray | None, at: dict) -> np.ndarray:
-    groep = at.get("group", 1)
-    stap = at.get("strides", [1, 1])[0]
-    rand = at.get("pads", [0, 0, 0, 0])[0]
-    uit_k, _, kh, kw = w.shape
-    if kh == 1 and groep == 1:
-        if stap != 1:
-            x = x[:, :, ::stap, ::stap]
-        n, c, h, br = x.shape
-        y = (w.reshape(uit_k, c) @ x.reshape(c, h * br)).reshape(1, uit_k, h, br)
-    else:
-        if rand:
-            x = np.pad(x, ((0, 0), (0, 0), (rand, rand), (rand, rand)))
-        v = _vensters(x[0], (kh, kw), axis=(1, 2))[:, ::stap, ::stap]  # c, h, b, kh, kw
-        c, h, br = v.shape[:3]
-        if groep == 1:
-            # (h*b, c*kh*kw) @ (c*kh*kw, uit)
-            kolommen = np.ascontiguousarray(v.transpose(1, 2, 0, 3, 4)).reshape(h * br, c * kh * kw)
-            y = (kolommen @ w.reshape(uit_k, c * kh * kw).T).T.reshape(1, uit_k, h, br)
-        elif groep == c == uit_k:
-            y = np.einsum("chbij,cij->chb", v, w[:, 0], optimize=True)[None]
-        else:
-            raise ValueError(f"convolutie met groep {groep} wordt niet ondersteund")
-    if b is not None:
-        y = y + b.reshape(1, -1, 1, 1)
-    return y
-
-
-def _maxpool(x: np.ndarray, at: dict) -> np.ndarray:
-    k = at["kernel_shape"][0]
-    rand = at.get("pads", [0, 0, 0, 0])[0]
-    if at.get("strides", [1, 1])[0] != 1:
-        raise ValueError("maxpool met stap > 1 wordt niet ondersteund")
-    x = np.pad(x, ((0, 0), (0, 0), (rand, rand), (rand, rand)), constant_values=-np.inf)
-    x = _vensters(x, k, axis=2).max(axis=-1)
-    return _vensters(x, k, axis=3).max(axis=-1)
-
-
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -60, 60)))
-
-
-class Model:
-    """Leest het modelbestand één keer en rekent beelden uit."""
-
-    def __init__(self, bestand: Path | str = MODELBESTAND) -> None:
-        with np.load(bestand, allow_pickle=False) as z:
-            graaf = json.loads(bytes(z["_graaf"]).decode())
-            self._w = {n: (z[n].astype(np.float32) if z[n].dtype == np.float16 else z[n]) for n in z.files if n != "_graaf"}
-        self._invoer, self._uitvoer, self._stappen = graaf["invoer"], graaf["uitvoer"], graaf["stappen"]
-        # na welke stap een tussenresultaat niet meer nodig is (geheugen vrijgeven)
-        self._laatst: dict[str, int] = {}
-        for i, (_, inn, _, _) in enumerate(self._stappen):
-            for n in inn:
-                self._laatst[n] = i
-
-    def reken(self, x: np.ndarray) -> np.ndarray:
-        t: dict[str, np.ndarray] = {self._invoer: x.astype(np.float32, copy=False)}
-        w = self._w
-
-        def haal(n: str) -> np.ndarray:
-            return w[n] if n in w else t[n]
-
-        for i, (soort, inn, uit, at) in enumerate(self._stappen):
-            if soort == "Conv":
-                y = _conv(haal(inn[0]), w[inn[1]], w[inn[2]] if len(inn) > 2 else None, at)
-            elif soort == "Sigmoid":
-                y = _sigmoid(haal(inn[0]))
-            elif soort == "Mul":
-                y = haal(inn[0]) * haal(inn[1])
-            elif soort == "Add":
-                y = haal(inn[0]) + haal(inn[1])
-            elif soort == "Concat":
-                y = np.concatenate([haal(n) for n in inn], axis=at["axis"])
-            elif soort == "MaxPool":
-                y = _maxpool(haal(inn[0]), at)
-            elif soort == "Slice":
-                a = haal(inn[0])
-                begin, eind, assen = (haal(n) for n in inn[1:4])
-                stappen = haal(inn[4]) if len(inn) > 4 else np.ones_like(begin)
-                snede = [slice(None)] * a.ndim
-                for b0, e0, as_, st in zip(begin, eind, assen, stappen):
-                    snede[int(as_)] = slice(int(b0), min(int(e0), a.shape[int(as_)]), int(st))
-                y = a[tuple(snede)]
-            elif soort == "Resize":
-                a = haal(inn[0])
-                schaal = haal(inn[2])
-                fh, fb = int(round(float(schaal[2]))), int(round(float(schaal[3])))
-                y = a.repeat(fh, axis=2).repeat(fb, axis=3)
-            elif soort == "Reshape":
-                a = haal(inn[0])
-                vorm = [a.shape[j] if int(v) == 0 else int(v) for j, v in enumerate(haal(inn[1]))]
-                y = a.reshape(vorm)
-            elif soort == "Transpose":
-                y = haal(inn[0]).transpose(at["perm"])
-            else:
-                raise ValueError(f"rekenstap {soort} wordt niet ondersteund")
-            t[uit[0]] = y
-            for n in inn:
-                if n in t and self._laatst.get(n) == i and n != self._uitvoer:
-                    del t[n]
-        return t[self._uitvoer]
+from .rekenen import Model, _conv, _maxpool, _sigmoid  # noqa: F401 - _conv e.d. ook voor de tests
 
 
 def _voorbereiden(beeld: Any) -> tuple[np.ndarray, float]:
@@ -209,7 +104,7 @@ def beoordeel(jpeg: bytes, drempel: float = DREMPEL) -> dict:
     global _model
     begin = time.perf_counter()
     if _model is None:
-        _model = Model()
+        _model = Model(MODELBESTAND)
     beeld = Image.open(io.BytesIO(jpeg))
     x, schaal = _voorbereiden(beeld)
     alle = personen_uit(_model.reken(x)[0], schaal, beeld.width, beeld.height, ONDERGRENS)
