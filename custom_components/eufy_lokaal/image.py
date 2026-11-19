@@ -19,7 +19,8 @@ async def async_setup_entry(
 ) -> None:
     c: EufyLokaalCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([*(LaatsteBeeld(c, sn) for sn in c.apparaten if sn not in c.stations),
-                        *(LiveMomentopname(c, sn) for sn in c.apparaten if sn not in c.stations)])
+                        *(LiveMomentopname(c, sn) for sn in c.apparaten if sn not in c.stations),
+                        *(LaatstePersoon(c, sn) for sn in c.apparaten if c.herkent(sn))])
 
 
 class LaatsteBeeld(CoordinatorEntity[EufyLokaalCoordinator], ImageEntity):
@@ -110,3 +111,40 @@ class LiveMomentopname(LaatsteBeeld):
         uit["bewaard"] = bool(m.get("bewaard"))
         uit["bron"] = self._beeld()[0]
         return uit
+
+
+class LaatstePersoon(LaatsteBeeld):
+    """v0.8.0: het laatste beeld waarop een persoon is herkend, met kader."""
+
+    _attr_name = "Laatste persoon"
+    _attr_icon = "mdi:account-eye"
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c, sn)
+        self._attr_unique_id = f"{sn}_laatste_persoon"
+        b = c.persoonsbeelden.get(sn)
+        if b:
+            self._tijd = b["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(b["tijd"], timezone.utc)
+
+    @property
+    def available(self) -> bool:
+        return self._sn in self.coordinator.persoonsbeelden
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        b = self.coordinator.persoonsbeelden.get(self._sn)
+        if b and b["tijd"] != self._tijd:
+            self._tijd = b["tijd"]
+            self._attr_image_last_updated = datetime.fromtimestamp(b["tijd"], timezone.utc)
+        CoordinatorEntity._handle_coordinator_update(self)
+
+    async def async_image(self) -> bytes | None:
+        b = self.coordinator.persoonsbeelden.get(self._sn)
+        return b["data"] if b else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        b = self.coordinator.persoonsbeelden.get(self._sn) or {}
+        return {"zekerheid": b.get("zekerheid"), "aantal": b.get("aantal"),
+                "bron": "beeldherkenning in Home Assistant"}

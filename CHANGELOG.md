@@ -1,5 +1,15 @@
 # Changelog — Eufy Lokaal
 
+## v0.8.0 — personen herkennen, lokaal
+
+- De HomeBase 3 zegt lokaal niet óf er een persoon in beeld is (zie v0.7.15); de sensoren *Persoon* gingen daardoor nooit aan (19-11: 0 keer in 7 dagen, tegen 373 keer beweging bij de deurbel). Nu beoordeelt de integratie zelf het beeld dat de HomeBase bij elke beweging opslaat. Er wordt geen stream gestart en er gaat niets naar buiten.
+- Alleen voor camera's die geen deurbel zijn (nu: zolder en achtertuin). De deurbel doet niet mee.
+- Het model is YOLOX-tiny (Apache-2.0), meegeleverd in `model/personen.npz` (9 MB) en uitgerekend met alleen numpy: geen extra pakketten, dus niets dat bij een update van Home Assistant kan ontbreken. Rekentijd ongeveer 0,2 s per beeld, één beeld tegelijk, buiten de event-loop. De uitkomst is getoetst tegen onnxruntime (afwijking < 0,02).
+- Een persoon telt vanaf 45 % zekerheid en 6 % van de beeldhoogte. Dan gaat *Persoon* 30 s aan, komt er een gebeurtenis `eufy_lokaal_gebeurtenis` (soort `onbekend_persoon`, bron `beeldherkenning`, met zekerheid, aantal en een link naar het beeld) en wordt het beeld met kader bewaard.
+- Nieuw per camera: beeld *Laatste persoon* en sensor *Personen vandaag* (met de laatste 20 momenten, de laatste uitslag en de rekentijd). Het logboek staat in `.storage/eufy_lokaal/personen/`, 14 dagen, hooguit 300 beelden per camera, en overleeft een herstart.
+- Een oud beeld (ouder dan 10 minuten, zoals het eerste beeld na een herstart) wordt wel beoordeeld maar geeft geen melding.
+- Let op: het beeld komt pas als de opname klaar is; *Persoon* loopt dus tot ongeveer een minuut achter op *Beweging*. Er wordt één stilstaand beeld per opname beoordeeld.
+
 ## v0.7.21 — accutemperatuur als temperatuur
 
 - Gevonden bij de opschoonronde van 02-11: de drie sensoren *Batterijtemperatuur* (`*_battery_temp`, °C) hadden geen `device_class`. Een parametersensor in °C krijgt nu `temperature`, zodat Home Assistant hem als temperatuur toont en omrekent. Geeft zo'n sensor geen getal, dan is hij onbekend in plaats van een tekst.

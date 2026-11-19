@@ -5,3 +5,9 @@ project overgenomen; het diende als protocolreferentie.
 
 Eufy is een merk van Anker Innovations. Dit project is niet verbonden met
 Anker of Eufy.
+
+De persoonsherkenning (v0.8.0) gebruikt de gewichten van YOLOX-tiny
+(https://github.com/Megvii-BaseDetection/YOLOX), Apache License 2.0,
+Copyright (c) 2021-2022 Megvii Inc. De gewichten staan omgezet (halve
+precisie, eigen bestandsvorm) in custom_components/eufy_lokaal/model/;
+de rekencode is eigen werk.

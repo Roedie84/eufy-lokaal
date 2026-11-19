@@ -56,6 +56,8 @@ def test_coordinator_beelden_en_opnames():
     c.apparaten = {"T8113": {"device_sn": "T8113", "station_sn": "T8030", "device_channel": 2}}
     c.laatste_info, c.beelden, c.opnames, c._beeld_voor = {}, {}, {}, {}
     c.tellingen = {"laatste_fout": None}
+    c._herkend_pad = {}  # v0.8.0: het nieuwe beeld gaat ook naar de persoonsherkenning
+    c.hass.async_create_background_task = lambda taak, naam: taak.close()
     sessie = MagicMock()
     sessie.vraag.return_value = True
     c.sessies = {"T8030": sessie}

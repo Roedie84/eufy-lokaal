@@ -1,4 +1,5 @@
-"""Stap 6: de livestream als MPEG-TS over HTTP (alleen met het token)."""
+"""Stap 6: de livestream als MPEG-TS over HTTP, en (v0.8.0) de beelden uit het
+persoonslogboek. Beide alleen met het token."""
 from __future__ import annotations
 
 import hmac
@@ -37,3 +38,27 @@ class LiveView(HomeAssistantView):
         except (ConnectionError, ConnectionResetError) as err:
             coordinator.live_stream(sn).laatste_fout = f"verbinding: {err}"
         return antwoord
+
+
+class PersoonView(HomeAssistantView):
+    """v0.8.0: één beeld uit het persoonslogboek (voor melding en dashboard)."""
+
+    url = f"/api/{DOMAIN}/persoon/{{bestand}}"
+    name = f"api:{DOMAIN}:persoon"
+    requires_auth = False  # beveiligd met hetzelfde willekeurige token per opstart
+
+    def __init__(self, hass) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request, bestand: str) -> web.Response:
+        from .persoonslog import lees
+
+        token = request.query.get("token", "")
+        for c in (self.hass.data.get(DOMAIN) or {}).values():
+            if hmac.compare_digest(token, getattr(c, "live_token", "") or "\0"):
+                data = await self.hass.async_add_executor_job(lees, c._persoonsmap(), bestand)
+                if data:
+                    return web.Response(body=data, content_type="image/jpeg",
+                                        headers={"Cache-Control": "private, max-age=86400"})
+                break
+        return web.Response(status=404)

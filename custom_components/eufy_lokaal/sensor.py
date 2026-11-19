@@ -35,6 +35,8 @@ async def async_setup_entry(
     for sn, a in c.apparaten.items():
         if sn not in c.stations:
             entiteiten += [ParametersSensor(c, sn, station=False), OpnamesSensor(c, sn)]
+            if c.herkent(sn):
+                entiteiten.append(PersonenSensor(c, sn))
         if parameter(a, PARAM_BATTERIJ) is not None:
             entiteiten.append(ApparaatBatterijSensor(c, sn))
         if parameter(a, PARAM_WIFI_RSSI) is not None:
@@ -294,6 +296,32 @@ class OpnamesSensor(_Basis):
                 "laatste_einde": o[0].get("end_time") if o else None,
                 "opnames": o,
                 "laatste_info_ruw": (self.coordinator.laatste_info.get(self._sn) or {}).get("ruw")}
+
+
+class PersonenSensor(_Basis):
+    """v0.8.0: hoe vaak vandaag een persoon is herkend, met de laatste momenten."""
+
+    _attr_name = "Personen vandaag"
+    _attr_icon = "mdi:account-eye"
+    _attr_native_unit_of_measurement = "keer"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # de lijst met beeld-URL's (token per opstart) hoort niet in de database
+    _unrecorded_attributes = frozenset({"laatste", "laatste_uitslag"})
+
+    def __init__(self, c, sn) -> None:
+        super().__init__(c)
+        self._sn = sn
+        self._attr_unique_id = f"{sn}_personen_vandaag"
+        self._attr_device_info = _apparaat_info(c, sn)
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.personen_overzicht(self._sn)["vandaag"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        o = self.coordinator.personen_overzicht(self._sn)
+        return {k: o[k] for k in ("bewaard", "laatste", "laatste_uitslag", "rekentijd_mediaan_ms")}
 
 
 class StationFirmwareSensor(_Station):

@@ -9,7 +9,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EufyLokaalCoordinator
-from .gebeurtenissen import DETECTIES
+from .gebeurtenissen import DETECTIES, is_deurbel
 from .sensor import _apparaat_info
 
 NAMEN = {"beweging": "Beweging", "persoon": "Persoon", "aangebeld": "Aangebeld", "huisdier": "Huisdier",
@@ -19,8 +19,7 @@ KLASSEN = {"beweging": BinarySensorDeviceClass.MOTION, "persoon": BinarySensorDe
 ICONEN = {"aangebeld": "mdi:doorbell-video", "huisdier": "mdi:paw", "voertuig": "mdi:car", "pakket": "mdi:package-variant"}
 
 
-def _is_deurbel(a: dict) -> bool:
-    return int(a.get("device_type") or 0) in (5, 7, 16, 91, 92, 93, 94) or str(a.get("device_sn", "")).startswith("T82")
+_is_deurbel = is_deurbel
 
 
 async def async_setup_entry(
@@ -58,4 +57,13 @@ class Detectie(CoordinatorEntity[EufyLokaalCoordinator], BinarySensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         g = self.coordinator.laatste_gebeurtenis.get(self._sn) or {}
-        return {"laatste_soort": g.get("soort"), "persoon": g.get("persoon"), "bron": "lokaal (HomeBase)"}
+        uit = {"laatste_soort": g.get("soort"), "persoon": g.get("persoon"), "bron": "lokaal (HomeBase)"}
+        if self._naam == "persoon":
+            # v0.8.0: persoon komt uit de eigen beeldherkenning (de HomeBase zegt het lokaal niet)
+            aan = self.coordinator.herkent(self._sn)
+            uit["herkenning"] = aan
+            if aan:
+                h = self.coordinator.herkenning.get(self._sn) or {}
+                uit.update({"zekerheid": h.get("zekerheid"), "aantal": h.get("aantal"),
+                            "bron": "beeldherkenning in Home Assistant"})
+        return uit

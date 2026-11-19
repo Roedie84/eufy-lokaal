@@ -2,6 +2,7 @@
 lokaal te vinden zijn (stap 1)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import statistics
 import time
@@ -116,6 +117,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         self.laatste_gebeurtenis: dict[str, dict] = {}
         self._bij_gebeurtenis: list = []
         self.momentopnamen: dict[str, dict] = {}
+        # v0.8.0: personen herkennen op het gebeurtenisbeeld (niet bij de deurbel)
+        self.herkenning: dict[str, dict] = {}        # laatste uitslag per camera
+        self.personen: dict[str, list[dict]] = {}    # logboek per camera, nieuwste eerst
+        self.persoonsbeelden: dict[str, dict] = {}   # laatste beeld met een persoon
+        self._herkend_pad: dict[str, str] = {}
+        self._herken_slot = asyncio.Lock()
         # v0.7.19: één token per Home Assistant-run, niet per coördinator.
         # Na het herladen van de integratie kreeg de coördinator een nieuw
         # token, maar de stream van HA bleef de oude URL gebruiken: 16/17-10
@@ -415,7 +422,111 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
                 f"begin {b.get('b64_begin')!r}, fout {b.get('fout')}, velden {b.get('sleutels')})")
             if not data:
                 return
+        eerste = sn not in self.beelden
         self.beelden[sn] = {"pad": pad, "data": data, "tijd": time.time(), "grootte": len(data)}
+        if data[:2] == b"\xff\xd8" and self.herkent(sn) and self._herkend_pad.get(sn) != pad:
+            self._herkend_pad[sn] = pad
+            self.hass.async_create_background_task(
+                self._async_herken(station_sn, sn, pad, data, eerste), f"{DOMAIN}_herkenning_{sn}")
+
+    # v0.8.0: persoonsherkenning ---------------------------------------------------------
+
+    def herkent(self, sn: str) -> bool:
+        """Beeldherkenning voor elke camera behalve de deurbel (keuze 19-11)."""
+        from .gebeurtenissen import is_deurbel
+
+        a = self.apparaten.get(sn)
+        return bool(a) and sn not in self.stations and not is_deurbel(a)
+
+    def _persoonsmap(self) -> str:
+        from .persoonslog import SUBMAP
+
+        return self.hass.config.path(".storage", DOMAIN, SUBMAP)
+
+    def persoon_url(self, bestand: str | None) -> str | None:
+        return f"/api/{DOMAIN}/persoon/{bestand}?token={self.live_token}" if bestand else None
+
+    async def _async_herken(self, station_sn: str, sn: str, pad: str, data: bytes, eerste: bool) -> None:
+        """Het gebeurtenisbeeld beoordelen; bij een persoon: detectie aan, beeld in het logboek."""
+        from homeassistant.util import dt as dt_util
+
+        from .herkenning import beoordeel, teken_vakken
+        from .persoonslog import MAX_PER_CAMERA, beeldtijd_uit_pad, is_vers, opslaan
+
+        t = self.tellingen.setdefault("herkenning", {"beoordeeld": 0, "met_persoon": 0, "fouten": 0, "ms": []})
+        async with self._herken_slot:  # één beeld tegelijk: het rekenwerk mag HA niet bezetten
+            try:
+                u = await self.hass.async_add_executor_job(beoordeel, data)
+            except Exception as err:  # noqa: BLE001 - een mislukte beoordeling mag verder niets raken
+                t["fouten"] += 1
+                self.herkenning[sn] = {"tijd": time.time(), "pad": pad, "fout": f"{type(err).__name__}: {err}"}
+                _LOGGER.warning("Beeld van %s niet beoordeeld: %s", sn, self.herkenning[sn]["fout"])
+                return
+        nu = time.time()
+        beeldtijd = beeldtijd_uit_pad(pad, dt_util.get_default_time_zone())
+        vers = is_vers(beeldtijd, nu, eerste)
+        personen = u["personen"]
+        zekerheid = max((p["zekerheid"] for p in personen), default=None)
+        t["beoordeeld"] += 1
+        t["ms"] = [*t["ms"][-49:], u["ms"]]
+        self.herkenning[sn] = {"tijd": nu, "beeldtijd": beeldtijd, "pad": pad, "aantal": len(personen),
+                               "zekerheid": zekerheid, "hoogste": u["hoogste"], "ms": u["ms"],
+                               "vers": vers, "fout": None}
+        if not personen or not vers:
+            self.async_update_listeners()
+            return
+        t["met_persoon"] += 1
+        moment = {"tijd": int(beeldtijd or nu), "zekerheid": zekerheid, "aantal": len(personen), "bestand": None}
+        try:
+            beeld = await self.hass.async_add_executor_job(teken_vakken, data, personen)
+            moment["bestand"] = await self.hass.async_add_executor_job(
+                opslaan, self._persoonsmap(), sn, moment["tijd"], zekerheid, len(personen), beeld, nu)
+        except Exception as err:  # noqa: BLE001 - zonder logboekbeeld telt de detectie nog steeds
+            beeld = data
+            _LOGGER.warning("Persoonsbeeld van %s niet bewaard: %s", sn, err)
+        self.persoonsbeelden[sn] = {"data": beeld, **moment}
+        self.personen[sn] = [moment, *(self.personen.get(sn) or [])][:MAX_PER_CAMERA]
+        self._gebeurtenis(station_sn, {"soort": "onbekend_persoon", "event_type": None, "apparaat_sn": sn,
+                                       "persoon": None, "bron": "beeldherkenning", "zekerheid": zekerheid,
+                                       "aantal": len(personen), "beeld": self.persoon_url(moment["bestand"])}, nu)
+        self.async_update_listeners()
+
+    async def async_personen_laden(self) -> None:
+        """Na het opstarten het logboek en het laatste persoonsbeeld teruglezen."""
+        from .persoonslog import lees, lijst, opruimen
+
+        map_ = self._persoonsmap()
+        try:
+            await self.hass.async_add_executor_job(opruimen, map_, time.time())
+            for sn in self.apparaten:
+                if not self.herkent(sn):
+                    continue
+                momenten = await self.hass.async_add_executor_job(lijst, map_, sn)
+                self.personen[sn] = [{k: m[k] for k in ("tijd", "zekerheid", "aantal", "bestand")} for m in momenten]
+                if momenten and sn not in self.persoonsbeelden:
+                    data = await self.hass.async_add_executor_job(lees, map_, momenten[0]["bestand"])
+                    if data:
+                        self.persoonsbeelden[sn] = {"data": data, **self.personen[sn][0]}
+        except OSError as err:
+            _LOGGER.warning("Persoonslogboek niet gelezen: %s", err)
+
+    def personen_overzicht(self, sn: str) -> dict:
+        """Voor de sensor: aantal vandaag, de laatste momenten (met beeld-URL) en de laatste uitslag."""
+        from homeassistant.util import dt as dt_util
+
+        begin = dt_util.start_of_local_day().timestamp()
+        momenten = self.personen.get(sn) or []
+        h = self.herkenning.get(sn) or {}
+        ms = (self.tellingen.get("herkenning") or {}).get("ms") or []
+        return {
+            "vandaag": sum(1 for m in momenten if m["tijd"] >= begin),
+            "bewaard": len(momenten),
+            "laatste": [{"tijd": dt_util.as_local(dt_util.utc_from_timestamp(m["tijd"])).isoformat(),
+                         "zekerheid": m["zekerheid"], "aantal": m["aantal"], "beeld": self.persoon_url(m["bestand"])}
+                        for m in momenten[:20]],
+            "laatste_uitslag": {k: h.get(k) for k in ("aantal", "zekerheid", "hoogste", "ms", "vers", "fout")} if h else None,
+            "rekentijd_mediaan_ms": round(statistics.median(ms)) if ms else None,
+        }
 
     # stap 6: livestream ----------------------------------------------------------------
 
@@ -787,4 +898,7 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             "beelden": {sn: {k: v for k, v in b.items() if k != "data"} for sn, b in self.beelden.items()},
             "opnames": {sn: len(v) for sn, v in self.opnames.items()},
             "live": {sn: {**l.samenvatting(), "route": getattr(l, "route", None)} for sn, l in self.live.items()},
+            "herkenning": {**{k: v for k, v in (t.get("herkenning") or {}).items() if k != "ms"},
+                           "camera's": [sn for sn in self.apparaten if self.herkent(sn)],
+                           "laatste": self.herkenning},
         }

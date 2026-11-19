@@ -15,13 +15,15 @@ from .coordinator import EufyLokaalCoordinator
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data.get(f"{DOMAIN}_view"):
-        from .http import LiveView
+        from .http import LiveView, PersoonView
 
         hass.http.register_view(LiveView(hass))
+        hass.http.register_view(PersoonView(hass))
         hass.data[f"{DOMAIN}_view"] = True
     coordinator = EufyLokaalCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     await coordinator.async_momentopnamen_laden()
+    await coordinator.async_personen_laden()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.start_lokaal()

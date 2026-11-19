@@ -90,3 +90,9 @@ def soorten_uit_opname(trigger_type, detectie_bits: int = 0, bekend_persoon: boo
     if not uit:
         uit.append("beweging")
     return uit
+
+
+def is_deurbel(apparaat: dict) -> bool:
+    """Deurbellen (op batterij): daar is aanbellen een detectie en blijft de beeldherkenning uit."""
+    return int(apparaat.get("device_type") or 0) in (5, 7, 16, 91, 92, 93, 94) or \
+        str(apparaat.get("device_sn", "")).startswith("T82")
