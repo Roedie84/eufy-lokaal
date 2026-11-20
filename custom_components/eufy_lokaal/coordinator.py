@@ -498,7 +498,8 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         t["ms"] = [*t["ms"][-49:], u["ms"]]
         self.herkenning[sn] = {"tijd": nu, "beeldtijd": beeldtijd, "pad": pad, "aantal": len(personen),
                                "zekerheid": zekerheid, "hoogste": u["hoogste"], "ms": u["ms"],
-                               "honden": len(honden), "vers": vers, "fout": None}
+                               "honden": len(honden), "hond_hoogste": u.get("hond_hoogste", 0.0),
+                               "vers": vers, "fout": None}
         if not vers or not (personen or honden):
             self.async_update_listeners()
             return
@@ -614,7 +615,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Beeld uit de opname niet bewaard: %s", err)
         self.herkenning.setdefault(sn, {}).update({"namen": namen, "onbekend": len(onbekend),
-                                                   "gezichten": len(a["gezichten"]), "beeldbron": "opname"})
+                                                   "gezichten": len(a["gezichten"]), "beeldbron": "opname",
+                                                   "opname_hond_hoogste": a.get("hond_hoogste")})
+        # v0.13.2: per opname de hoogste hondzekerheid bewaren (laatste 50) om de drempel te bepalen
+        lijst = t.setdefault("hond_hoogste_opnames", [])
+        lijst.append(round(a.get("hond_hoogste", 0.0), 2))
+        del lijst[:-50]
         eerste = onbekend[0].get("id") if onbekend else None
         self.hass.bus.async_fire(f"{DOMAIN}_gebeurtenis", {
             "soort": "namen", "bron": "opname", "apparaat_sn": sn, "station_sn": station_sn,

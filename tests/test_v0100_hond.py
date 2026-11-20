@@ -81,3 +81,13 @@ def test_oude_hond_na_herstart_geen_gebeurtenis(tmp_path):
     _draai(c, TUIN, _pad(time.time() - 3 * 3600), eerste=True)
     c.hass.bus.async_fire.assert_not_called()
     assert c.herkenning[TUIN]["honden"] == 1
+
+
+def test_hoogste_hondzekerheid_ook_onder_de_drempel():
+    from test_v080_persoonsherkenning import _jpeg
+
+    u = h.beoordeel(_jpeg())
+    assert u["hond_hoogste"] == 0.0
+    ruw = _ruw((1378, 0.3, 16, 60))   # 30 %: geen hond, wel gemeten
+    assert not h.personen_uit(ruw, 1.0, 416, 416, h.HOND_DREMPEL, h.HOND_MIN_HOOGTE, h.KLASSE_HOND)
+    assert h.personen_uit(ruw, 1.0, 416, 416, h.ONDERGRENS, 0.0, h.KLASSE_HOND)[0]["zekerheid"] == 0.3

@@ -115,11 +115,13 @@ def analyseer(frames: list, bekend: dict[str, list[list[float]]]) -> dict:
     gezichten: list[dict] = []
     beste = None          # (aantal personen, zekerheid, jpeg, vakken, honden)
     honden = False
+    hond_hoogste = 0.0
     max_personen = 0
     for beeld in beelden:
         jpeg = _jpeg(beeld)
         u = beoordeel(jpeg)
         honden = honden or bool(u.get("honden"))
+        hond_hoogste = max(hond_hoogste, u.get("hond_hoogste", 0.0))
         if not u["personen"]:
             continue
         max_personen = max(max_personen, len(u["personen"]))
@@ -148,4 +150,5 @@ def analyseer(frames: list, bekend: dict[str, list[list[float]]]) -> dict:
     beeld = teken_vakken(beste[2], beste[3], beste[4]) if beste else None
     return {"beelden": len(beelden), "personen": max_personen, "hond": honden, "gezichten": groepen,
             "gezichten_gezien": len(gezichten), "gezichten_bruikbaar": len(bruikbaar),
+            "hond_hoogste": round(hond_hoogste, 3),
             "beeld": beeld, "ms": round((time.perf_counter() - begin) * 1000)}

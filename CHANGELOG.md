@@ -1,5 +1,9 @@
 # Changelog — Eufy Lokaal
 
+## v0.13.2 — hond: meten waarom hij niet gezien wordt
+
+- 19/20-11: in 29 opnames met een persoon (ook de avondwandeling om 22:17) is de hond nooit herkend. Om de drempel (45 %) te kunnen bepalen, wordt nu per beeld en per opname de hoogste hondzekerheid bewaard, ook onder de drempel (`hond_hoogste` in de laatste uitslag, `hond_hoogste_opnames` in de diagnostiek, de laatste 50). Verder verandert er niets.
+
 ## v0.13.1 — alleen bruikbare gezichten uit de opname
 
 - Eerste echte proef 19-11 16:47: de HomeBase stuurt de opnames (625 videoberichten, twee keer CMD_DOWNLOAD_FINISH) en er kwamen gezichten uit, maar één persoon die voorbij liep gaf vier 'gezichten': één goed, drie van opzij, overbelicht of half. Nu telt een gezicht alleen als het (bijna) recht van voren is (neus tussen de ogen, ogen niet te dicht bij elkaar) en niet wit uitgebeten of te donker, en komen er nooit meer gezichten uit een opname dan er tegelijk personen in beeld waren. Per gezicht nieuwe waarden `frontaal`, `belichting` en `kwaliteit`; de analyse meldt `gezichten_gezien` en `gezichten_bruikbaar`.

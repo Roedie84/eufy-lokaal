@@ -117,6 +117,9 @@ def beoordeel(jpeg: bytes, drempel: float = DREMPEL) -> dict:
         "personen": [p for p in alle if p["zekerheid"] >= drempel],
         # v0.10.0: honden uit hetzelfde model, zonder extra rekenwerk
         "honden": personen_uit(ruw, schaal, beeld.width, beeld.height, HOND_DREMPEL, HOND_MIN_HOOGTE, KLASSE_HOND),
+        # v0.13.2: hoogste hondzekerheid, ook onder de drempel (om de drempel te kunnen bepalen)
+        "hond_hoogste": max((p["zekerheid"] for p in personen_uit(ruw, schaal, beeld.width, beeld.height, ONDERGRENS,
+                                                                   0.0, KLASSE_HOND)), default=0.0),
         "hoogste": max((p["zekerheid"] for p in alle), default=0.0),
         "breedte": beeld.width, "hoogte": beeld.height,
         "ms": round((time.perf_counter() - begin) * 1000),
