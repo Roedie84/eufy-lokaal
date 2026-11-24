@@ -241,7 +241,7 @@ def test_onbekende_gezichten_bewaard_en_in_de_gebeurtenis(tmp_path):
     naam, data = c.hass.bus.async_fire.call_args[0]
     assert data["soort"] == "onbekend_persoon" and data["namen"] == [] and data["onbekende_gezichten"] == 2
     assert data["beeldbron"] == "live" and data["gezicht_id"] in c.bekenden["onbekend"]
-    assert data["gezicht_beeld"] == f"/api/eufy_lokaal/persoon/gezicht_{data['gezicht_id']}.jpg?token=geheim"
+    assert data["gezicht_beeld"] == f"/api/eufy_lokaal/persoon/geheim/gezicht_{data['gezicht_id']}.jpg"
     assert (tmp_path / ".storage" / "eufy_lokaal" / "personen" / bk.BESTAND).exists()
     assert c.herkenning[TUIN]["onbekend"] == 2 and c.detectie_aan(TUIN, "persoon")
 
@@ -338,6 +338,6 @@ def test_lijst_wachtende_gezichten_voor_het_dashboard(tmp_path):
     _draai(c)
     lijst = c.gezichten_wachtend()
     assert len(lijst) == 2 and {x["camera"] for x in lijst} == {"Achtertuin"}
-    assert all(x["beeld"].startswith("/api/eufy_lokaal/persoon/gezicht_") for x in lijst)
+    assert all("/gezicht_" in x["beeld"] for x in lijst)
     assert c.gezichten_wachtend(1) == lijst[:1]
     assert {"wachtend", "ingeleerd"} <= GezichtenSensor._unrecorded_attributes

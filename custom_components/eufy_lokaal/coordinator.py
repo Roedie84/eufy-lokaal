@@ -470,7 +470,13 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         return self.hass.config.path(".storage", DOMAIN, SUBMAP)
 
     def persoon_url(self, bestand: str | None) -> str | None:
-        return f"/api/{DOMAIN}/persoon/{bestand}?token={self.live_token}" if bestand else None
+        """v0.13.3: het token in het pad, niet als ?token=: de iPhone-app laadt een bijlage met
+        een relatieve URL zonder de query (melding 24-11: 'Bijlage kan niet worden geladen, 404').
+        Met het vaste beeldtoken, zodat oude meldingen ook na een herstart nog laden."""
+        if not bestand:
+            return None
+        token = self.__dict__.get("beeld_token") or self.live_token
+        return f"/api/{DOMAIN}/persoon/{token}/{bestand}"
 
     async def _async_herken(self, station_sn: str, sn: str, pad: str, data: bytes, eerste: bool) -> None:
         """Het gebeurtenisbeeld beoordelen; bij een persoon: detectie aan, beeld in het logboek."""
@@ -795,6 +801,12 @@ class EufyLokaalCoordinator(DataUpdateCoordinator[dict]):
         from .persoonslog import lees, lijst, opruimen
 
         map_ = self._persoonsmap()
+        try:
+            from .persoonslog import beeldtoken
+
+            self.beeld_token = await self.hass.async_add_executor_job(beeldtoken, map_)
+        except OSError as err:
+            _LOGGER.warning("Beeldtoken niet bewaard, het per-run-token blijft: %s", err)
         try:
             self.bekenden = await self.hass.async_add_executor_job(bekenden_laden, map_)
             await self.hass.async_add_executor_job(opruimen, map_, time.time())

@@ -44,18 +44,23 @@ class PersoonView(HomeAssistantView):
     """v0.8.0: één beeld uit het persoonslogboek (voor melding en dashboard)."""
 
     url = f"/api/{DOMAIN}/persoon/{{bestand}}"
+    # v0.13.3: het token in het pad (zie EufyLokaalCoordinator.persoon_url); de oude vorm
+    # met ?token= blijft werken voor het dashboard en oudere meldingen.
+    extra_urls = [f"/api/{DOMAIN}/persoon/{{token}}/{{bestand}}"]
     name = f"api:{DOMAIN}:persoon"
-    requires_auth = False  # beveiligd met hetzelfde willekeurige token per opstart
+    requires_auth = False  # beveiligd met een willekeurig token
 
     def __init__(self, hass) -> None:
         self.hass = hass
 
-    async def get(self, request: web.Request, bestand: str) -> web.Response:
+    async def get(self, request: web.Request, bestand: str, token: str | None = None) -> web.Response:
         from .persoonslog import lees
 
-        token = request.query.get("token", "")
+        token = token or request.query.get("token", "")
         for c in (self.hass.data.get(DOMAIN) or {}).values():
-            if hmac.compare_digest(token, getattr(c, "live_token", "") or "\0"):
+            geldig = [t for t in (getattr(c, "live_token", ""), c.__dict__.get("beeld_token", "")
+                                  if hasattr(c, "__dict__") else "") if t]
+            if any(hmac.compare_digest(token, t) for t in geldig):
                 data = await self.hass.async_add_executor_job(lees, c._persoonsmap(), bestand)
                 if data:
                     return web.Response(body=data, content_type="image/jpeg",

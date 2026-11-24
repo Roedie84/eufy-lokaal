@@ -283,7 +283,7 @@ def test_persoon_zet_detectie_aan_bewaart_beeld_en_meldt(tmp_path):
     naam, data = c.hass.bus.async_fire.call_args[0]
     assert naam == "eufy_lokaal_gebeurtenis" and data["soort"] == "onbekend_persoon"
     assert data["bron"] == "beeldherkenning" and data["zekerheid"] == 0.82
-    assert data["beeld"] == f"/api/eufy_lokaal/persoon/{moment['bestand']}?token=geheim"
+    assert data["beeld"] == f"/api/eufy_lokaal/persoon/geheim/{moment['bestand']}"
     t = c.tellingen["herkenning"]
     assert {k: t[k] for k in ("beoordeeld", "met_persoon", "fouten", "ms")} == \
         {"beoordeeld": 1, "met_persoon": 1, "fouten": 0, "ms": [210]}
@@ -354,7 +354,7 @@ def test_logboek_teruglezen_na_herstart_en_overzicht(tmp_path):
     assert c.persoonsbeelden[TUIN]["data"] == b"\xff\xd8net"
     o = c.personen_overzicht(TUIN)
     assert o["bewaard"] == 2 and o["vandaag"] in (0, 1)  # 5 s geleden kan net gisteren zijn
-    assert o["laatste"][0]["beeld"].endswith(f"{nieuw}?token=geheim") and o["laatste_uitslag"] is None
+    assert o["laatste"][0]["beeld"].endswith(f"/{nieuw}") and o["laatste_uitslag"] is None
 
 
 def test_sensor_en_beeld_alleen_live_niet_in_de_recorder():

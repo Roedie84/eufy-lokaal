@@ -120,3 +120,27 @@ def lees(map_: str | os.PathLike, naam: str) -> bytes | None:
         return (Path(map_) / naam).read_bytes()
     except OSError:
         return None
+
+
+TOKEN_BESTAND = "beeldtoken"
+
+
+def beeldtoken(map_: str | os.PathLike) -> str:
+    """v0.13.3: een vast token voor de beelden uit het logboek, bewaard naast de beelden.
+
+    Het livestream-token wisselt per Home Assistant-run; een melding van gisteren of van
+    voor een herstart gaf dan 404. Dit token blijft gelijk zolang het bestand bestaat."""
+    import secrets
+
+    pad = Path(map_) / TOKEN_BESTAND
+    try:
+        bestaand = pad.read_text().strip()
+        if len(bestaand) >= 16:
+            return bestaand
+    except OSError:
+        pass
+    Path(map_).mkdir(parents=True, exist_ok=True)
+    nieuw = secrets.token_urlsafe(24)
+    pad.write_text(nieuw)
+    return nieuw
+

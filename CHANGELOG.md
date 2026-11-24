@@ -1,5 +1,10 @@
 # Changelog — Eufy Lokaal
 
+## v0.13.3 — beeld in de iPhone-melding laadt weer
+
+- Ruud 24-11: melding "Onbekend persoon gezien, Voordeur 14:49" gaf "Bijlage kan niet worden geladen - 404", terwijl het beeld wel in het logboek stond en HA niet herstart was. De beeld-URL had het token als `?token=`; de iPhone-app laadt een bijlage met een relatieve URL zonder die query. Nu staat het token in het pad: `/api/eufy_lokaal/persoon/<token>/<bestand>`. De oude vorm met `?token=` blijft werken (dashboard, oudere meldingen).
+- Vast beeldtoken (`.storage/eufy_lokaal/personen/beeldtoken`) in plaats van het token per HA-run: meldingen en het logboek op het dashboard blijven ook na een herstart laden. Het livestream-token blijft per run. Het tokenbestand zelf is niet via de URL op te vragen.
+
 ## v0.13.2 — hond: meten waarom hij niet gezien wordt
 
 - 19/20-11: in 29 opnames met een persoon (ook de avondwandeling om 22:17) is de hond nooit herkend. Om de drempel (45 %) te kunnen bepalen, wordt nu per beeld en per opname de hoogste hondzekerheid bewaard, ook onder de drempel (`hond_hoogste` in de laatste uitslag, `hond_hoogste_opnames` in de diagnostiek, de laatste 50). Verder verandert er niets.
